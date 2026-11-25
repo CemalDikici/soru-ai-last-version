@@ -302,6 +302,14 @@
             {
               "name": "similarQuestions",
               "value": "={{$('Benzer Soruları Ayrıştır').item.json.similarQuestions}}"
+            },
+            {
+              "name": "docName",
+              "value": "={{ $('Bekleyen Soruyu Kilitle ve Getir').first().json.docName }}"
+            },
+            {
+              "name": "processingLockId",
+              "value": "={{ $('Bekleyen Soruyu Kilitle ve Getir').first().json.processingLockId }}"
             }
           ]
         },
@@ -347,6 +355,14 @@
             {
               "name": "questionFileId",
               "value": "={{ $node[\"Görseli Base64'e Çevir\"].json.questionFileId }}"
+            },
+            {
+              "name": "docName",
+              "value": "={{ $('Bekleyen Soruyu Kilitle ve Getir').first().json.docName }}"
+            },
+            {
+              "name": "processingLockId",
+              "value": "={{ $('Bekleyen Soruyu Kilitle ve Getir').first().json.processingLockId }}"
             }
           ]
         },

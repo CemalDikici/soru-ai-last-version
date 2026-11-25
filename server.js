@@ -51,7 +51,10 @@ const EXPOSE_ERROR_DETAILS = process.env.EXPOSE_ERROR_DETAILS === "true";
 const REVIEW_STATUS = "İnceleme Gerekli";
 const UID_PATTERN = /^[A-Za-z0-9]{1,128}$/;
 const QUESTION_TIME_PATTERN = /^\d{13}$/;
-const MAX_LEASE_EXPIRIES = 3;
+const CANCELED_STATUS = "İptal Edildi"; // öğrencinin kararı; kesin son durum, asla yeniden işlenmez
+const PROCESSING_STATUS = "İşleniyor";
+const WAITING_STATUS = "Bekliyor";
+const MAX_SOLVE_ATTEMPTS = 3; // 3 deneme de başarısız olursa "İnceleme Gerekli"
 const LESSONS = ["Matematik", "Fizik", "Kimya", "Biyoloji", "Türkçe", "Edebiyat", "Tarih", "Coğrafya", "Felsefe", "Din Kültürü", "İngilizce", "Diğer"];
 const LESSON_ALIASES = new Map([
   ["geometri", "Matematik"],
@@ -202,6 +205,73 @@ function reviewUpdate(reason) {
   };
 }
 
+class StatusConflictError extends Error {
+  constructor(message) {
+    super(message);
+    this.status = 409;
+  }
+}
+
+// Ön koşullu durum değişikliği: soru hâlâ "İşleniyor" ve kilit bizdeyse günceller.
+// Öğrenci o arada iptal ettiyse (veya başka işlem aldıysa) hiçbir şeyin üzerine yazılmaz.
+async function updateIfLocked(docRef, processingLockId, buildUpdate) {
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(docRef);
+    if (!snapshot.exists) {
+      const error = new Error("Soru bulunamadı");
+      error.status = 404;
+      throw error;
+    }
+    const data = snapshot.data();
+    if (data.durum !== PROCESSING_STATUS || data.processingLockId !== processingLockId) {
+      throw new StatusConflictError(`Soru artık işlenmiyor (durum: ${data.durum})`);
+    }
+    const update = buildUpdate(data);
+    transaction.update(docRef, update);
+    return { data, update };
+  });
+}
+
+// Başarısız deneme: deneme hakkı kaldıysa sessizce "Bekliyor"a döner (öğrenci düğme görmez),
+// MAX_SOLVE_ATTEMPTS. başarısızlıkta veya kalıcı hatada "İnceleme Gerekli" olur.
+function failedAttemptUpdate(data, reason, { permanent = false } = {}) {
+  const attempts = Math.max(0, Number(data.failedAttemptCount) || 0) + 1;
+  const text = String(reason || "Teknik hata").slice(0, 1000);
+  if (permanent || attempts >= MAX_SOLVE_ATTEMPTS) {
+    return { ...reviewUpdate(text), failedAttemptCount: attempts };
+  }
+  return {
+    durum: WAITING_STATUS,
+    failedAttemptCount: attempts,
+    lastFailureReason: text,
+    lastFailedAt: new Date(),
+    processingLockId: FieldValue.delete(),
+    processingLeaseExpiresAt: FieldValue.delete()
+  };
+}
+
+// Dosya yazmadan önce: soru hâlâ bu kilitle işleniyor mu, klasör/zaman sorunun kendisiyle uyuşuyor mu?
+async function assertWritableQuestion(docName, processingLockId, userId, questionFileId) {
+  const docRef = getFirestoreDocRef(docName);
+  if (!docRef || !processingLockId) {
+    const error = new Error("docName ve processingLockId gerekli");
+    error.status = 400;
+    throw error;
+  }
+  const snapshot = await docRef.get();
+  const data = snapshot.exists ? snapshot.data() : null;
+  if (!data || data.durum !== PROCESSING_STATUS || data.processingLockId !== processingLockId) {
+    throw new StatusConflictError(`Soru artık işlenmiyor (durum: ${data?.durum || "yok"}); dosya yazılmadı`);
+  }
+  const photoPath = getStoragePath(data.fotoLink || "") || "";
+  const photoTime = validQuestionTime(photoPath.split("/").pop()?.replace(/\.[^/.]+$/, ""));
+  if (validUid(data.kullaniciUid) !== userId || photoTime !== questionFileId) {
+    const error = new Error("Klasör/zaman sorunun kullaniciUid ve fotoğrafıyla uyuşmuyor; dosya yazılmadı");
+    error.status = 422;
+    throw error;
+  }
+}
+
 function safePathSegment(value, fallback) {
   const sanitized = String(value || "")
     .normalize("NFKC")
@@ -262,25 +332,8 @@ app.get("/get-pending-question", async (req, res) => {
       return sendError(res, 400, "Geçersiz docId");
     }
 
-    const reviewSnapshot = await db.collection("sorular")
-      .where("durum", "==", "İnceleme Gerekli")
-      .limit(20)
-      .get();
-    for (const reviewDoc of reviewSnapshot.docs) {
-      await db.runTransaction(async (transaction) => {
-        const fresh = await transaction.get(reviewDoc.ref);
-        if (!fresh.exists || fresh.data()?.durum !== "İnceleme Gerekli") return;
-        const retryCount = Math.max(0, Number(fresh.data()?.reviewRetryCount) || 0);
-        if (retryCount >= 3) return;
-        transaction.update(reviewDoc.ref, {
-          durum: "Bekliyor",
-          reviewRetryCount: retryCount + 1,
-          lastReviewRetryAt: new Date(),
-          processingLockId: FieldValue.delete(),
-          processingLeaseExpiresAt: FieldValue.delete()
-        });
-      });
-    }
+    // Not: "İnceleme Gerekli" sorular artık otomatik olarak yeniden kuyruğa alınmaz;
+    // öğrenci bu durumda "iptal / devam et" kararı verir (soruIncelemeKarari).
 
     const processingSnapshot = await db.collection("sorular")
       .where("durum", "==", "İşleniyor")
@@ -294,20 +347,7 @@ app.get("/get-pending-question", async (req, res) => {
         const fresh = await transaction.get(processingDoc.ref);
         const freshLease = fresh.data()?.processingLeaseExpiresAt?.toDate?.();
         if (fresh.exists && fresh.data()?.durum === "İşleniyor" && freshLease && freshLease <= new Date()) {
-          const expiries = Math.max(0, Number(fresh.data()?.leaseExpiryCount) || 0) + 1;
-          if (expiries >= MAX_LEASE_EXPIRIES) {
-            transaction.update(processingDoc.ref, {
-              ...reviewUpdate(`Teknik hata: işlem ${expiries} kez zaman aşımına uğradı`),
-              leaseExpiryCount: expiries
-            });
-          } else {
-            transaction.update(processingDoc.ref, {
-              durum: "Bekliyor",
-              leaseExpiryCount: expiries,
-              processingLockId: FieldValue.delete(),
-              processingLeaseExpiresAt: FieldValue.delete()
-            });
-          }
+          transaction.update(processingDoc.ref, failedAttemptUpdate(fresh.data(), "Teknik hata: işlem zaman aşımına uğradı"));
         }
       });
     }
@@ -350,32 +390,32 @@ app.get("/get-pending-question", async (req, res) => {
     const fotoLink = data.fotoLink || "";
     const kullaniciUid = validUid(data.kullaniciUid);
     if (!kullaniciUid) {
-      await doc.ref.update(reviewUpdate("kullaniciUid eksik veya geçersiz (yalnızca harf ve rakam); dosya yazılmadı"));
+      await updateIfLocked(doc.ref, processingLockId, (current) => failedAttemptUpdate(current, "kullaniciUid eksik veya geçersiz (yalnızca harf ve rakam); dosya yazılmadı", { permanent: true }));
       return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "kullaniciUid geçersiz" });
     }
     const docName = `projects/project-21-3e377/databases/(default)/documents/sorular/${doc.id}`;
 
     if (!fotoLink) {
-      await doc.ref.update(reviewUpdate("Teknik hata: fotoLink boş"));
+      await updateIfLocked(doc.ref, processingLockId, (current) => failedAttemptUpdate(current, "Teknik hata: fotoLink boş", { permanent: true }));
       return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "fotoLink boş" });
     }
 
     const filePath = getStoragePath(fotoLink);
     if (!filePath || !isAllowedQuestionImagePath(filePath)) {
-      await doc.ref.update(reviewUpdate("Teknik hata: fotoLink geçersiz"));
+      await updateIfLocked(doc.ref, processingLockId, (current) => failedAttemptUpdate(current, "Teknik hata: fotoLink geçersiz", { permanent: true }));
       return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "fotoLink geçersiz" });
     }
     const pathParts = filePath.split("/");
     const questionTime = validQuestionTime(pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, ""));
     if (pathParts[1] !== kullaniciUid || !questionTime) {
-      await doc.ref.update(reviewUpdate("Fotoğraf yolu kullanicilar/{kullaniciUid}/sorular/{13 haneli zaman} biçiminde değil; dosya yazılmadı"));
+      await updateIfLocked(doc.ref, processingLockId, (current) => failedAttemptUpdate(current, "Fotoğraf yolu kullanicilar/{kullaniciUid}/sorular/{13 haneli zaman} biçiminde değil; dosya yazılmadı", { permanent: true }));
       return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "Fotoğraf yolu geçersiz" });
     }
 
     const file = bucket.file(filePath);
     const [exists] = await file.exists();
     if (!exists) {
-      await doc.ref.update({ ...reviewUpdate("Teknik hata: Storage görseli bulunamadı"), errorFilePath: filePath });
+      await updateIfLocked(doc.ref, processingLockId, (current) => ({ ...failedAttemptUpdate(current, "Teknik hata: Storage görseli bulunamadı"), errorFilePath: filePath }));
       return res.json({
         success: true,
         hasQuestion: false,
@@ -388,7 +428,7 @@ app.get("/get-pending-question", async (req, res) => {
     const contentType = metadata.contentType || contentTypeFromName(filePath);
     const size = Number(metadata.size || 0);
     if (!ALLOWED_IMAGE_TYPES.has(contentType) || !Number.isFinite(size) || size <= 0 || size > MAX_IMAGE_BYTES) {
-      await doc.ref.update(reviewUpdate("Görsel türü veya boyutu güvenlik sınırlarını aşmaktadır"));
+      await updateIfLocked(doc.ref, processingLockId, (current) => failedAttemptUpdate(current, "Görsel türü veya boyutu güvenlik sınırlarını aşmaktadır", { permanent: true }));
       return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "Görsel güvenlik kontrolü başarısız" });
     }
 
@@ -451,13 +491,14 @@ app.post("/image-to-base64", async (req, res) => {
 app.post("/render", async (req, res) => {
   let browser;
   try {
-    const { html, userId, questionFileId } = req.body;
+    const { html, userId, questionFileId, docName, processingLockId } = req.body;
     if (typeof html !== "string" || !html.trim()) return sendError(res, 400, "html gerekli");
     if (Buffer.byteLength(html, "utf8") > 1024 * 1024) return sendError(res, 413, "HTML çok büyük");
 
     const finalUserId = validUid(userId);
     const finalFileId = validQuestionTime(questionFileId);
     if (!finalUserId || !finalFileId) return sendError(res, 422, "Geçersiz kullaniciUid veya zaman; dosya yazılmadı");
+    await assertWritableQuestion(docName, processingLockId, finalUserId, finalFileId);
     const renderResponse = await fetch("http://renderer:3002/render", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -485,7 +526,7 @@ app.post("/render", async (req, res) => {
       expiresAt: signedUrlExpiry.toISOString()
     });
   } catch (error) {
-    return sendError(res, 500, "Kart üretilemedi", error.message);
+    return sendError(res, error.status || 500, "Kart üretilemedi", error.message);
   } finally {
     if (browser) await browser.close();
   }
@@ -493,7 +534,7 @@ app.post("/render", async (req, res) => {
 
 app.post("/save-solution-json", async (req, res) => {
   try {
-    const { userId, questionFileId, question, steps, answer, topic, cardImageUrl, firebasePath } = req.body;
+    const { userId, questionFileId, question, steps, answer, topic, cardImageUrl, firebasePath, docName, processingLockId } = req.body;
     const verification = normalizeVerification(req.body.verification);
     if (!questionFileId || !question || !answer || !cardImageUrl || !firebasePath) {
       return sendError(res, 422, "Eksik çözüm çıktısı");
@@ -509,6 +550,7 @@ app.post("/save-solution-json", async (req, res) => {
     const finalFileId = validQuestionTime(questionFileId);
     if (!finalUserId || !finalFileId) return sendError(res, 422, "Geçersiz kullaniciUid veya zaman; dosya yazılmadı");
     if (firebasePath !== `solution-cards/${finalUserId}/${finalFileId}.png`) return sendError(res, 422, "Kart yolu kullanıcı/zaman ile uyuşmuyor");
+    await assertWritableQuestion(docName, processingLockId, finalUserId, finalFileId);
     const solutionData = {
       question: latexToDisplayText(question),
       steps: Array.isArray(steps) ? steps.map(latexToDisplayText) : [],
@@ -539,7 +581,7 @@ app.post("/save-solution-json", async (req, res) => {
       expiresAt: signedUrlExpiry.toISOString()
     });
   } catch (error) {
-    return sendError(res, 500, "Çözüm JSON'u kaydedilemedi", error.message);
+    return sendError(res, error.status || 500, "Çözüm JSON'u kaydedilemedi", error.message);
   }
 });
 
@@ -613,6 +655,18 @@ app.post("/update-question-status", async (req, res) => {
 
     return res.json({ success: true, durum: "Çözüldü", docPath: docRef.path });
   } catch (error) {
+    if (error.status === 409) {
+      // Öğrenci bu arada iptal ettiyse: çözüm hiçbir yerde görünmesin, yazılan dosyaları kaldır.
+      try {
+        const current = await getFirestoreDocRef(req.body.docName)?.get();
+        if (current?.exists && current.data().durum === CANCELED_STATUS) {
+          await Promise.all([
+            bucket.file(String(req.body.firebasePath || "")).delete({ ignoreNotFound: true }),
+            bucket.file(String(req.body.jsonPath || "")).delete({ ignoreNotFound: true })
+          ]);
+        }
+      } catch (_) { /* temizlik başarısızsa asıl hatayı döndür */ }
+    }
     return sendError(res, error.status || 500, "Soru durumu güncellenemedi", error.message);
   }
 });
@@ -625,30 +679,12 @@ app.post("/mark-question-review", async (req, res) => {
     const docRef = getFirestoreDocRef(docName);
     if (!docRef || !processingLockId) return sendError(res, 400, "docName ve processingLockId gerekli");
 
-    await db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(docRef);
-      if (!snapshot.exists) {
-        const error = new Error("Soru bulunamadı");
-        error.status = 404;
-        throw error;
-      }
-      const data = snapshot.data();
-      if (data.durum !== "İşleniyor" || data.processingLockId !== processingLockId) {
-        const error = new Error("İşlem kilidi geçersiz");
-        error.status = 409;
-        throw error;
-      }
-      transaction.update(docRef, {
-        durum: REVIEW_STATUS,
-        reviewReason: reason,
-        verification: verification || null,
-        reviewRequestedAt: new Date(),
-        processingLockId: FieldValue.delete(),
-        processingLeaseExpiresAt: FieldValue.delete()
-      });
-    });
+    const { update } = await updateIfLocked(docRef, processingLockId, (data) => ({
+      ...failedAttemptUpdate(data, reason),
+      verification: verification || null
+    }));
 
-    return res.json({ success: true, durum: "İnceleme Gerekli", docPath: docRef.path });
+    return res.json({ success: true, durum: update.durum, failedAttemptCount: update.failedAttemptCount, docPath: docRef.path });
   } catch (error) {
     return sendError(res, error.status || 500, "Soru incelemeye gönderilemedi", error.message);
   }
@@ -660,25 +696,12 @@ app.post("/cancel-question", async (req, res) => {
     const docRef = getFirestoreDocRef(docName);
     if (!docRef || !processingLockId) return sendError(res, 400, "docName ve processingLockId gerekli");
 
-    await db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(docRef);
-      if (!snapshot.exists) {
-        const error = new Error("Soru bulunamadı");
-        error.status = 404;
-        throw error;
-      }
-      const data = snapshot.data();
-      if (data.durum !== "İşleniyor" || data.processingLockId !== processingLockId) {
-        const error = new Error("İşlem kilidi geçersiz");
-        error.status = 409;
-        throw error;
-      }
-      transaction.update(docRef, reviewUpdate(`Teknik hata: ${reason || "İşlem başarısız"}`));
-    });
+    const { update } = await updateIfLocked(docRef, processingLockId, (data) =>
+      failedAttemptUpdate(data, `Teknik hata: ${reason || "İşlem başarısız"}`));
 
-    return res.json({ success: true, durum: REVIEW_STATUS, message: "Soru incelemeye alındı" });
+    return res.json({ success: true, durum: update.durum, failedAttemptCount: update.failedAttemptCount });
   } catch (error) {
-    return sendError(res, error.status || 500, "Soru iptal edilemedi", error.message);
+    return sendError(res, error.status || 500, "Soru güncellenemedi", error.message);
   }
 });
 

@@ -71,3 +71,24 @@ test("technical errors route to İnceleme Gerekli", () => {
     assert.equal(node(name).onError, "continueErrorOutput");
   }
 });
+
+test("retries stay silent; only the 3rd failure becomes İnceleme Gerekli", () => {
+  assert.match(server, /const MAX_SOLVE_ATTEMPTS = 3;/);
+  assert.doesNotMatch(server, /reviewRetryCount/); // İnceleme Gerekli artık otomatik geri alınmıyor
+  assert.match(server, /durum: WAITING_STATUS,\s*failedAttemptCount: attempts/);
+});
+
+test("İptal Edildi is terminal and status changes are preconditioned", () => {
+  assert.match(server, /const CANCELED_STATUS = "İptal Edildi";/);
+  assert.doesNotMatch(server, /doc\.ref\.update\(/); // her değişiklik transaction + kilit kontrolüyle
+  assert.match(server, /async function updateIfLocked/);
+  for (const route of ["/render", "/save-solution-json"]) {
+    const start = server.indexOf(`app.post("${route}"`);
+    const body = server.slice(start, server.indexOf("app.post(", start + 10));
+    assert.match(body, /await assertWritableQuestion\(/, `${route} writes without checking status`);
+  }
+  for (const name of ["Kartı Oluştur ve Yükle", "Çözüm JSON'unu Kaydet"]) {
+    const sent = node(name).parameters.bodyParameters.parameters.map((p) => p.name);
+    assert.ok(sent.includes("docName") && sent.includes("processingLockId"), `${name} must send docName + processingLockId`);
+  }
+});
