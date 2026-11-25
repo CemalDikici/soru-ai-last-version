@@ -686,8 +686,16 @@ app.post("/mark-question-review", async (req, res) => {
     const docRef = getFirestoreDocRef(docName);
     if (!docRef || !processingLockId) return sendError(res, 400, "docName ve processingLockId gerekli");
 
+    // failureType: "ai" = model güvenle çözemedi, "technical" = teknik hata (n8n gönderir).
+    const failureType = req.body.failureType === "technical" || (!req.body.failureType && /^Teknik hata/.test(reason))
+      ? "technical"
+      : "ai";
+
     const { update } = await updateIfLocked(docRef, processingLockId, (data) => ({
-      ...failedAttemptUpdate(data, reason),
+      // Öğrencinin "Çözmeye devam et" ek denemesi (ekDenemeKullanildi, uygulama yazar; burada yalnızca okunur):
+      // model yine güvenle çözemezse tek seferde "İnceleme Gerekli". Teknik hatalar yine yeniden denenir.
+      ...failedAttemptUpdate(data, reason, { permanent: failureType === "ai" && data.ekDenemeKullanildi === true }),
+      lastFailureType: failureType,
       verification: verification || null
     }));
 

@@ -101,3 +101,13 @@ test("a question re-queued to Bekliyor (e.g. after İptal Edildi) gets 3 fresh a
   assert.match(server, /where\("durum", "==", "Bekliyor"\)/);
   assert.doesNotMatch(server, /where\("durum", "==", "Bekliyor"\)[^;]*kullaniciKarari/);
 });
+
+test("extra attempt (ekDenemeKullanildi): one AI try, then İnceleme Gerekli; app fields are read-only", () => {
+  assert.match(server, /permanent: failureType === "ai" && data\.ekDenemeKullanildi === true/);
+  // uygulamanın alanlarına asla yazılmaz
+  assert.doesNotMatch(server, /ekDenemeKullanildi\s*:/);
+  assert.doesNotMatch(server, /kullaniciKarari\s*:/);
+  const sent = (name) => node(name).parameters.bodyParameters.parameters.find((p) => p.name === "failureType")?.value;
+  assert.equal(sent("İnceleme Gerekiyor"), "ai");
+  assert.equal(sent("Teknik Hatayı İncelemeye Gönder"), "technical");
+});

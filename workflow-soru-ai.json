@@ -781,6 +781,10 @@
             {
               "name": "reason",
               "value": "={{$json.verification.rationale || 'Bağımsız doğrulama yetersiz'}}"
+            },
+            {
+              "name": "failureType",
+              "value": "ai"
             }
           ]
         },
@@ -1007,6 +1011,10 @@
             {
               "name": "reason",
               "value": "={{ ('Teknik hata (' + $prevNode.name + '): ' + String(($json.error && ($json.error.message || $json.error.description)) || $json.error || $json.message || 'bilinmeyen hata')).slice(0, 900) }}"
+            },
+            {
+              "name": "failureType",
+              "value": "technical"
             }
           ]
         },
