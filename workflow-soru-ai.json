@@ -1,1 +1,1498 @@
-[{"updatedAt":"2026-10-29T07:23:25.753Z","createdAt":"2026-10-27T10:26:26.219Z","id":"1h6z7JLfxcpVRKhl","name":"My workflow 2","description":null,"active":true,"isArchived":false,"nodes":[{"parameters":{"assignments":{"assignments":[{"id":"0dc6a29d-335f-4a95-9a08-6cca2bea672b","name":"imageUrl","value":"={{ $json.fotoLink }}","type":"string"}]},"options":{}},"type":"n8n-nodes-base.set","typeVersion":3.4,"position":[-5456,-1712],"id":"5ec45832-b288-48db-a3e4-6ac31ca25e15","name":"Görsel URL'sini Hazırla"},{"parameters":{},"type":"n8n-nodes-base.manualTrigger","typeVersion":1,"position":[-6544,-1680],"id":"18f03a97-72c9-42dc-9a4b-317651de8f81","name":"Manuel Test Tetikleyicisi"},{"parameters":{"url":"https://firestore.googleapis.com/v1/projects/project-21-3e377/databases/(default)/documents/sorular","options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-6336,-1680],"id":"ba3ce18a-bea1-424e-9d9b-b05811e321a7","name":"Firestore Sorularını Getir"},{"parameters":{"jsCode":"const docs = $json.documents || [];\n\nreturn docs.map(doc => {\n  return {\n    json: {\n      docName: doc.name, // 🔥 BU ÖNEMLİ\n      docId: doc.name.split(\"/\").pop(),\n\n      fotoLink: doc.fields?.fotoLink?.stringValue || null,\n      durum: doc.fields?.durum?.stringValue || null,\n      kullaniciEposta: doc.fields?.kullaniciEposta?.stringValue || null,\n      tarih: doc.fields?.tarih?.stringValue || null\n    }\n  };\n});"},"type":"n8n-nodes-base.code","typeVersion":2,"position":[-6144,-1680],"id":"21fbfa0d-806e-4a0d-9011-a749c74bbcfb","name":"Soru Kayıtlarını Dönüştür"},{"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":3},"conditions":[{"id":"de6af238-3fdc-4f96-9cfc-4efe57fc7711","leftValue":"={{ $('Firestore Sorularını Getir').item.json.documents[0].fields.durum.stringValue }}","rightValue":"Bekliyor","operator":{"type":"string","operation":"equals"}}],"combinator":"and"},"options":{}},"type":"n8n-nodes-base.if","typeVersion":2.3,"position":[-5712,-1696],"id":"9c007ab3-9488-4eb6-b591-6e210973e298","name":"İlk Soru Bekliyor mu?"},{"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":3},"conditions":[{"id":"c7333849-4460-43b1-80dd-8e22463b6a6b","leftValue":"={{ $json.durum }}","rightValue":"Bekliyor","operator":{"type":"string","operation":"equals","name":"filter.operator.equals"}},{"id":"0262d443-214d-4b9e-ac54-7c7913d1d34e","leftValue":"={{ $json.fotoLink }}","rightValue":"","operator":{"type":"string","operation":"notEmpty","singleValue":true}}],"combinator":"and"},"options":{}},"type":"n8n-nodes-base.if","typeVersion":2.3,"position":[-5984,-1680],"id":"2934bec6-b0be-48de-972c-3d26fcba3a6f","name":"Bekleyen ve Görselli mi?"},{"parameters":{"method":"POST","url":"http://127.0.0.1:3001/image-to-base64","authentication":"genericCredentialType","genericAuthType":"httpHeaderAuth","sendHeaders":true,"headerParameters":{"parameters":[]},"sendBody":true,"bodyParameters":{"parameters":[{"name":"originalImageUrl","value":"={{$json.fotoLink}}"}]},"options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-9312,176],"id":"2eeacad1-c0d2-4c89-be6f-436c9391c7de","name":"Görseli Base64'e Çevir","credentials":{"httpHeaderAuth":{"id":"063bca404048d84d2f63c387","name":"Soru AI API Token"}}},{"parameters":{"method":"POST","url":"https://api.openai.com/v1/chat/completions","authentication":"predefinedCredentialType","nodeCredentialType":"openAiApi","sendHeaders":true,"headerParameters":{"parameters":[{"name":"Content-Type","value":"application/json"}]},"sendBody":true,"specifyBody":"json","jsonBody":"={\n  \"model\": \"gpt-4.1-mini\",\n  \"temperature\": 0,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\": \"Görseldeki soruyu dikkatle oku ve çöz. Soruyu kendi içinde yeniden kontrol et. Tahmin etme; görsel okunamıyorsa confidence değerini düşür. Yalnızca şemaya uygun JSON döndür.\"\n        },\n        {\n          \"type\": \"image_url\",\n          \"image_url\": {\n            \"url\": \"data:{{$json.mimeType}};base64,{{$json.base64}}\"\n          }\n        }\n      ]\n    }\n  ],\n  \"response_format\": {\n    \"type\": \"json_schema\",\n    \"json_schema\": {\n      \"name\": \"primary_solution\",\n      \"strict\": true,\n      \"schema\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"question\": {\n            \"type\": \"string\"\n          },\n          \"steps\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"answer\": {\n            \"type\": \"string\"\n          },\n          \"topic\": {\n            \"type\": \"string\"\n          },\n          \"confidence\": {\n            \"type\": \"number\",\n            \"minimum\": 0,\n            \"maximum\": 1\n          }\n        },\n        \"required\": [\n          \"question\",\n          \"steps\",\n          \"answer\",\n          \"topic\",\n          \"confidence\"\n        ],\n        \"additionalProperties\": false\n      }\n    }\n  }\n}","options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-8848,16],"id":"dad69bd9-bb34-4ef4-95f9-aadc8caad205","name":"OpenAI ile Soruyu Çöz","credentials":{"openAiApi":{"id":"AEfh8Z0xoYVSGHOs","name":"OpenAi account"}}},{"parameters":{"jsCode":"const raw = $json.choices?.[0]?.message?.content ?? '';\nconst fence = String.fromCharCode(96).repeat(3);\nconst cleaned = String(raw).replaceAll(fence + 'json', '').replaceAll(fence, '').trim();\nconst start = cleaned.indexOf('{');\nconst end = cleaned.lastIndexOf('}');\nif (start < 0 || end <= start) throw new Error('Birinci çözüm JSON döndürmedi');\nconst parsed = JSON.parse(cleaned.slice(start, end + 1));\nif (!parsed.question || !Array.isArray(parsed.steps) || !parsed.answer || !parsed.topic) throw new Error('Birinci çözüm eksik alan içeriyor');\nconst confidence = Number(parsed.confidence);\nconst image = $(\"Görseli Base64'e Çevir\").first().json;\nreturn [{ json: { question: String(parsed.question), steps: parsed.steps.map(String), answer: String(parsed.answer), topic: String(parsed.topic), confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0, mimeType: image.mimeType, base64: image.base64, rawOpenAi: raw } }];"},"type":"n8n-nodes-base.code","typeVersion":2,"position":[-8432,304],"id":"d706d86a-c8ba-4754-a2e1-5fc0e4c2b940","name":"AI Yanıtını Ayrıştır"},{"parameters":{"jsCode":"const escapeHtml = (value) => String(value ?? '')\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;')\n  .replace(/'/g, '&#39;');\n\nconst rawQuestion = $json.question || '';\nconst rawSteps = Array.isArray($json.steps) ? $json.steps : [];\nconst rawAnswer = $json.answer || '';\nconst rawTopic = $json.topic || '';\nconst verification = $json.verification || {};\n\nconst question = escapeHtml(rawQuestion);\nconst steps = rawSteps.map(escapeHtml);\nconst answer = escapeHtml(rawAnswer);\nconst topic = escapeHtml(rawTopic);\nconst stepsHtml = steps.map((step, index) => '<li><strong>Adım ' + (index + 1) + ':</strong> ' + step + '</li>').join('');\n\nconst html = '<!DOCTYPE html><html lang=\"tr\"><head><meta charset=\"UTF-8\"><style>' +\n  'body{margin:0;padding:32px;background:#f3f4f6;font-family:Arial,sans-serif}' +\n  '.card{width:900px;background:#fff;border-radius:24px;padding:36px;box-shadow:0 12px 40px rgba(0,0,0,.12);color:#111827}' +\n  '.title{font-size:32px;font-weight:800;margin-bottom:16px}.topic{font-size:18px;color:#2563eb;margin-bottom:24px;font-weight:700}' +\n  '.question{font-size:22px;line-height:1.5;margin-bottom:28px}ol{padding-left:24px;font-size:19px;line-height:1.6}li{margin-bottom:12px}' +\n  '.verified{margin:0 0 20px;color:#166534;font-size:15px;font-weight:700}.answer{margin-top:32px;padding:20px;border-radius:16px;background:#dcfce7;font-size:26px;font-weight:800;color:#166534}' +\n  '</style></head><body><div class=\"card\"><div class=\"title\">Soru Çözümü</div><div class=\"topic\">' + topic +\n  '</div><div class=\"verified\">✓ Bağımsız AI doğrulamasından geçti</div><div class=\"question\">' + question + '</div><ol>' + stepsHtml + '</ol><div class=\"answer\">Cevap: ' + answer +\n  '</div></div></body></html>';\n\nreturn [{ json: { question: rawQuestion, steps: rawSteps, answer: rawAnswer, topic: rawTopic, verification, html } }];"},"type":"n8n-nodes-base.code","typeVersion":2,"position":[-8944,576],"id":"99dcd659-35d7-4235-bc85-4ca80ba14756","name":"Kart HTML'ini Oluştur"},{"parameters":{"method":"POST","url":"http://127.0.0.1:3001/save-solution-json","authentication":"genericCredentialType","genericAuthType":"httpHeaderAuth","sendHeaders":true,"headerParameters":{"parameters":[]},"sendBody":true,"bodyParameters":{"parameters":[{"name":"userId","value":"={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.userId}}"},{"name":"question","value":"={{$('Hakem Sonucunu Ayrıştır').item.json.question}}"},{"name":"steps","value":"={{$('Hakem Sonucunu Ayrıştır').item.json.steps}}"},{"name":"answer","value":"={{$('Hakem Sonucunu Ayrıştır').item.json.answer}}"},{"name":"topic","value":"={{$('Hakem Sonucunu Ayrıştır').item.json.topic}}"},{"name":"cardImageUrl","value":"={{$json.cardImageUrl}}"},{"name":"firebasePath","value":"={{$json.firebasePath}}"},{"name":"questionFileId","value":"={{$('Kartı Oluştur ve Yükle').item.json.questionFileId}}"},{"name":"verification","value":"={{$('Hakem Sonucunu Ayrıştır').item.json.verification}}"}]},"options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-8528,576],"id":"bf39824b-a7d1-4836-a8fb-7a552b27c2d2","name":"Çözüm JSON'unu Kaydet","credentials":{"httpHeaderAuth":{"id":"063bca404048d84d2f63c387","name":"Soru AI API Token"}}},{"parameters":{"method":"POST","url":"http://127.0.0.1:3001/render","authentication":"genericCredentialType","genericAuthType":"httpHeaderAuth","sendHeaders":true,"headerParameters":{"parameters":[]},"sendBody":true,"bodyParameters":{"parameters":[{"name":"html","value":"={{ $json.html }}"},{"name":"userId","value":"={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.userId}}"},{"name":"questionFileId","value":"={{ $node[\"Görseli Base64'e Çevir\"].json.questionFileId }}"}]},"options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-8736,576],"id":"33bab0e8-e99c-4b21-8a9d-bdcc75f4c7fd","name":"Kartı Oluştur ve Yükle","credentials":{"httpHeaderAuth":{"id":"063bca404048d84d2f63c387","name":"Soru AI API Token"}}},{"parameters":{"rule":{"interval":[{"field":"seconds"}]}},"type":"n8n-nodes-base.scheduleTrigger","typeVersion":1.3,"position":[-9968,176],"id":"1595907e-c950-4097-b912-99e90ba39f25","name":"Zamanlanmış Tetikleyici"},{"parameters":{"method":"POST","url":"http://127.0.0.1:3001/update-question-status","authentication":"genericCredentialType","genericAuthType":"httpHeaderAuth","sendHeaders":true,"headerParameters":{"parameters":[]},"sendBody":true,"bodyParameters":{"parameters":[{"name":"docName","value":"={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.docName}}"},{"name":"cardImageUrl","value":"={{$('Kartı Oluştur ve Yükle').item.json.cardImageUrl}}"},{"name":"firebasePath","value":"={{$('Kartı Oluştur ve Yükle').item.json.firebasePath}}"},{"name":"jsonUrl","value":"={{$json.jsonUrl}}"},{"name":"jsonPath","value":"={{$json.jsonPath}}"},{"name":"processingLockId","value":"={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.processingLockId}}"},{"name":"verification","value":"={{$('Hakem Sonucunu Ayrıştır').item.json.verification}}"}]},"options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-8320,576],"id":"910105d3-9f9b-43fd-8159-082185960ca2","name":"Soruyu Çözüldü Olarak İşaretle","credentials":{"httpHeaderAuth":{"id":"063bca404048d84d2f63c387","name":"Soru AI API Token"}}},{"parameters":{"url":"http://127.0.0.1:3001/get-pending-question","authentication":"genericCredentialType","genericAuthType":"httpHeaderAuth","sendHeaders":true,"headerParameters":{"parameters":[]},"options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-9760,176],"id":"f58175ab-0a1f-4054-8360-f7d0a4c2b460","name":"Bekleyen Soruyu Kilitle ve Getir","credentials":{"httpHeaderAuth":{"id":"063bca404048d84d2f63c387","name":"Soru AI API Token"}}},{"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":3},"conditions":[{"id":"1378cfb2-2ec1-4336-b126-70171db02659","leftValue":"={{$json.hasQuestion}}","rightValue":true,"operator":{"type":"boolean","operation":"true","singleValue":true}}],"combinator":"and"},"options":{}},"type":"n8n-nodes-base.if","typeVersion":2.3,"position":[-9552,176],"id":"b3d53a50-044d-441d-8dd4-43305d8ad609","name":"Bekleyen Soru Var mı?"},{"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":3},"conditions":[{"id":"41fc8076-727f-43f6-846c-7680aa5d15c6","leftValue":"={{$json.success}}","rightValue":"true","operator":{"type":"boolean","operation":"true","singleValue":true}}],"combinator":"and"},"options":{}},"type":"n8n-nodes-base.if","typeVersion":2.3,"position":[-9104,176],"id":"49799023-c42a-4d71-b09e-54bc634aa47c","name":"Görsel Hazır mı?"},{"parameters":{"method":"POST","url":"http://127.0.0.1:3001/cancel-question","authentication":"genericCredentialType","genericAuthType":"httpHeaderAuth","sendHeaders":true,"headerParameters":{"parameters":[]},"sendBody":true,"bodyParameters":{"parameters":[{"name":"docName","value":"={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.docName}}"},{"name":"reason","value":"Görsel silinmiş veya erişilemiyor"},{"name":"processingLockId","value":"={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.processingLockId}}"}]},"options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-8896,288],"id":"9ff018f2-7866-419f-be7c-2a96be194e65","name":"Soruyu İptal Et","credentials":{"httpHeaderAuth":{"id":"063bca404048d84d2f63c387","name":"Soru AI API Token"}}},{"parameters":{"method":"POST","url":"https://api.openai.com/v1/chat/completions","authentication":"predefinedCredentialType","nodeCredentialType":"openAiApi","sendHeaders":true,"headerParameters":{"parameters":[{"name":"Content-Type","value":"application/json"}]},"sendBody":true,"specifyBody":"json","jsonBody":"={\n  \"model\": \"gpt-4.1\",\n  \"temperature\": 0,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\": \"Bu soruyu başka bir çözümden tamamen bağımsız olarak çöz. Görseli kendin oku, işlemleri yeniden yap ve sonucunu kontrol et. Tahmin etme; okunamıyorsa confidence değerini düşür. Yalnızca şemaya uygun JSON döndür.\"\n        },\n        {\n          \"type\": \"image_url\",\n          \"image_url\": {\n            \"url\": \"data:{{$json.mimeType}};base64,{{$json.base64}}\"\n          }\n        }\n      ]\n    }\n  ],\n  \"response_format\": {\n    \"type\": \"json_schema\",\n    \"json_schema\": {\n      \"name\": \"independent_solution\",\n      \"strict\": true,\n      \"schema\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"question\": {\n            \"type\": \"string\"\n          },\n          \"steps\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"answer\": {\n            \"type\": \"string\"\n          },\n          \"topic\": {\n            \"type\": \"string\"\n          },\n          \"confidence\": {\n            \"type\": \"number\",\n            \"minimum\": 0,\n            \"maximum\": 1\n          }\n        },\n        \"required\": [\n          \"question\",\n          \"steps\",\n          \"answer\",\n          \"topic\",\n          \"confidence\"\n        ],\n        \"additionalProperties\": false\n      }\n    }\n  }\n}","options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-9984,576],"id":"669442a0-ff15-44f6-9dd9-50ddf8004d9b","name":"Bağımsız İkinci Çözüm","credentials":{"openAiApi":{"id":"AEfh8Z0xoYVSGHOs","name":"OpenAi account"}}},{"parameters":{"jsCode":"const raw = $json.choices?.[0]?.message?.content ?? '';\nconst fence = String.fromCharCode(96).repeat(3);\nconst cleaned = String(raw).replaceAll(fence + 'json', '').replaceAll(fence, '').trim();\nconst start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}');\nif (start < 0 || end <= start) throw new Error('İkinci çözüm JSON döndürmedi');\nconst parsed = JSON.parse(cleaned.slice(start, end + 1));\nif (!parsed.question || !Array.isArray(parsed.steps) || !parsed.answer || !parsed.topic) throw new Error('İkinci çözüm eksik alan içeriyor');\nconst confidence = Number(parsed.confidence);\nconst primary = $(\"AI Yanıtını Ayrıştır\").first().json;\nconst image = $(\"Görseli Base64'e Çevir\").first().json;\nconst independent = { question: String(parsed.question), steps: parsed.steps.map(String), answer: String(parsed.answer), topic: String(parsed.topic), confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0 };\nconst primarySummary = { question: primary.question, steps: primary.steps, answer: primary.answer, topic: primary.topic, confidence: primary.confidence };\nconst judgePrompt = 'Görseldeki soruyu kendin yeniden çöz. Aşağıdaki iki aday çözümü yalnızca kanıt olarak karşılaştır; çoğunluğa körü körüne uyma. Görsel net değilse, cevaplar uyuşmuyorsa veya sonucu matematiksel/mantıksal olarak doğrulayamıyorsan approved=false ve needsManualReview=true yap. Güven 0.92 altında ise onaylama. Birinci çözüm: ' + JSON.stringify(primarySummary) + ' İkinci çözüm: ' + JSON.stringify(independent);\nconst judgePromptJsonEscaped = JSON.stringify(judgePrompt).slice(1, -1);\nreturn [{ json: { ...independent, independent, primary: primarySummary, judgePrompt, judgePromptJsonEscaped, mimeType: image.mimeType, base64: image.base64, rawIndependent: raw } }];"},"type":"n8n-nodes-base.code","typeVersion":2,"position":[-9776,576],"id":"077d650c-c897-45ed-888f-a47b601fcd81","name":"İkinci Çözümü Ayrıştır"},{"parameters":{"method":"POST","url":"https://api.openai.com/v1/chat/completions","authentication":"predefinedCredentialType","nodeCredentialType":"openAiApi","sendHeaders":true,"headerParameters":{"parameters":[{"name":"Content-Type","value":"application/json"}]},"sendBody":true,"specifyBody":"json","jsonBody":"={\n  \"model\": \"gpt-4.1\",\n  \"temperature\": 0,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\": \"{{$json.judgePromptJsonEscaped}}\"\n        },\n        {\n          \"type\": \"image_url\",\n          \"image_url\": {\n            \"url\": \"data:{{$json.mimeType}};base64,{{$json.base64}}\"\n          }\n        }\n      ]\n    }\n  ],\n  \"response_format\": {\n    \"type\": \"json_schema\",\n    \"json_schema\": {\n      \"name\": \"verified_solution\",\n      \"strict\": true,\n      \"schema\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"question\": {\n            \"type\": \"string\"\n          },\n          \"steps\": {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          },\n          \"answer\": {\n            \"type\": \"string\"\n          },\n          \"topic\": {\n            \"type\": \"string\"\n          },\n          \"approved\": {\n            \"type\": \"boolean\"\n          },\n          \"confidence\": {\n            \"type\": \"number\",\n            \"minimum\": 0,\n            \"maximum\": 1\n          },\n          \"primaryAnswer\": {\n            \"type\": \"string\"\n          },\n          \"independentAnswer\": {\n            \"type\": \"string\"\n          },\n          \"rationale\": {\n            \"type\": \"string\"\n          },\n          \"needsManualReview\": {\n            \"type\": \"boolean\"\n          }\n        },\n        \"required\": [\n          \"question\",\n          \"steps\",\n          \"answer\",\n          \"topic\",\n          \"approved\",\n          \"confidence\",\n          \"primaryAnswer\",\n          \"independentAnswer\",\n          \"rationale\",\n          \"needsManualReview\"\n        ],\n        \"additionalProperties\": false\n      }\n    }\n  }\n}","options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-9568,576],"id":"60675f92-a1e1-4d2f-90dd-1c74b03c1f95","name":"Hakem GPT ile Karar Ver","credentials":{"openAiApi":{"id":"AEfh8Z0xoYVSGHOs","name":"OpenAi account"}}},{"parameters":{"jsCode":"const raw = $json.choices?.[0]?.message?.content ?? '';\nconst fence = String.fromCharCode(96).repeat(3);\nconst cleaned = String(raw).replaceAll(fence + 'json', '').replaceAll(fence, '').trim();\nconst start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}');\nif (start < 0 || end <= start) throw new Error('Hakem geçerli JSON döndürmedi');\nconst parsed = JSON.parse(cleaned.slice(start, end + 1));\nif (!parsed.question || !Array.isArray(parsed.steps) || !parsed.answer || !parsed.topic) throw new Error('Hakem sonucu eksik');\nconst confidence = Number(parsed.confidence);\nconst safeConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0;\nconst approved = parsed.approved === true && parsed.needsManualReview !== true && safeConfidence >= 0.92;\nconst verification = { approved, confidence: safeConfidence, primaryAnswer: String(parsed.primaryAnswer ?? ''), independentAnswer: String(parsed.independentAnswer ?? ''), finalAnswer: String(parsed.answer), rationale: String(parsed.rationale ?? '') };\nreturn [{ json: { question: String(parsed.question), steps: parsed.steps.map(String), answer: String(parsed.answer), topic: String(parsed.topic), verificationApproved: approved, verification } }];"},"type":"n8n-nodes-base.code","typeVersion":2,"position":[-9360,576],"id":"78d72471-1097-4adf-b96b-2b996cd0442d","name":"Hakem Sonucunu Ayrıştır"},{"parameters":{"conditions":{"options":{"caseSensitive":true,"leftValue":"","typeValidation":"strict","version":3},"conditions":[{"id":"285ac4af-02ce-4ae0-bc34-8d9df9836319","leftValue":"={{$json.verificationApproved}}","rightValue":"true","operator":{"type":"boolean","operation":"true","singleValue":true}}],"combinator":"and"},"options":{}},"type":"n8n-nodes-base.if","typeVersion":2.3,"position":[-9152,576],"id":"912b6c3e-f7d5-4c4c-bcbc-f2740008b347","name":"Doğrulama Yeterli mi?"},{"parameters":{"method":"POST","url":"http://127.0.0.1:3001/mark-question-review","authentication":"genericCredentialType","genericAuthType":"httpHeaderAuth","sendHeaders":true,"headerParameters":{"parameters":[]},"sendBody":true,"bodyParameters":{"parameters":[{"name":"docName","value":"={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.docName}}"},{"name":"processingLockId","value":"={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.processingLockId}}"},{"name":"verification","value":"={{$json.verification}}"},{"name":"reason","value":"={{$json.verification.rationale || 'Bağımsız doğrulama yetersiz'}}"}]},"options":{}},"type":"n8n-nodes-base.httpRequest","typeVersion":4.4,"position":[-8944,832],"id":"b62a273d-bac4-46db-9244-8494301bf3ce","name":"İnceleme Gerekiyor","credentials":{"httpHeaderAuth":{"id":"063bca404048d84d2f63c387","name":"Soru AI API Token"}}}],"connections":{"Manuel Test Tetikleyicisi":{"main":[[{"node":"Firestore Sorularını Getir","type":"main","index":0}]]},"Firestore Sorularını Getir":{"main":[[{"node":"Soru Kayıtlarını Dönüştür","type":"main","index":0}]]},"Soru Kayıtlarını Dönüştür":{"main":[[{"node":"Bekleyen ve Görselli mi?","type":"main","index":0}]]},"İlk Soru Bekliyor mu?":{"main":[[{"node":"Görsel URL'sini Hazırla","type":"main","index":0}],[]]},"Bekleyen ve Görselli mi?":{"main":[[{"node":"İlk Soru Bekliyor mu?","type":"main","index":0}],[]]},"Görseli Base64'e Çevir":{"main":[[{"node":"Görsel Hazır mı?","type":"main","index":0}]]},"OpenAI ile Soruyu Çöz":{"main":[[{"node":"AI Yanıtını Ayrıştır","type":"main","index":0}]]},"AI Yanıtını Ayrıştır":{"main":[[{"node":"Bağımsız İkinci Çözüm","type":"main","index":0}]]},"Kart HTML'ini Oluştur":{"main":[[{"node":"Kartı Oluştur ve Yükle","type":"main","index":0}]]},"Çözüm JSON'unu Kaydet":{"main":[[{"node":"Soruyu Çözüldü Olarak İşaretle","type":"main","index":0}]]},"Kartı Oluştur ve Yükle":{"main":[[{"node":"Çözüm JSON'unu Kaydet","type":"main","index":0}]]},"Zamanlanmış Tetikleyici":{"main":[[{"node":"Bekleyen Soruyu Kilitle ve Getir","type":"main","index":0}]]},"Bekleyen Soruyu Kilitle ve Getir":{"main":[[{"node":"Bekleyen Soru Var mı?","type":"main","index":0}]]},"Bekleyen Soru Var mı?":{"main":[[{"node":"Görseli Base64'e Çevir","type":"main","index":0}],[]]},"Görsel Hazır mı?":{"main":[[{"node":"OpenAI ile Soruyu Çöz","type":"main","index":0}],[{"node":"Soruyu İptal Et","type":"main","index":0}]]},"Bağımsız İkinci Çözüm":{"main":[[{"node":"İkinci Çözümü Ayrıştır","type":"main","index":0}]]},"İkinci Çözümü Ayrıştır":{"main":[[{"node":"Hakem GPT ile Karar Ver","type":"main","index":0}]]},"Hakem GPT ile Karar Ver":{"main":[[{"node":"Hakem Sonucunu Ayrıştır","type":"main","index":0}]]},"Hakem Sonucunu Ayrıştır":{"main":[[{"node":"Doğrulama Yeterli mi?","type":"main","index":0}]]},"Doğrulama Yeterli mi?":{"main":[[{"node":"Kart HTML'ini Oluştur","type":"main","index":0}],[{"node":"İnceleme Gerekiyor","type":"main","index":0}]]}},"settings":{"executionOrder":"v1","binaryMode":"separate"},"staticData":{"node:Zamanlanmış Tetikleyici":{"recurrenceRules":[]}},"meta":{"templateCredsSetupCompleted":true,"instanceId":"6918404244b2bb7e4c1846714769b2d569ba06a99dc672c8664f744912443808"},"pinData":{},"versionId":"22b68ca2-1bad-4d9b-87db-24a7d1e64020","activeVersionId":"22b68ca2-1bad-4d9b-87db-24a7d1e64020","versionCounter":17,"triggerCount":1,"tags":[],"shared":[{"updatedAt":"2026-10-27T10:26:26.226Z","createdAt":"2026-10-27T10:26:26.226Z","role":"workflow:owner","workflowId":"1h6z7JLfxcpVRKhl","projectId":"JAZWPOBhdcZSbS2i","project":{"updatedAt":"2026-09-19T17:29:36.326Z","createdAt":"2026-09-19T17:02:36.252Z","id":"JAZWPOBhdcZSbS2i","name":"Cemal cemal.dkc13@gmail.com <cemal.dkc13@gmail.com>","type":"personal","icon":null,"description":null,"creatorId":"619dba6c-da8b-4220-a37b-ab12a3dcaa15"}}]}]
+{
+  "updatedAt": "2026-11-25T17:42:59.000Z",
+  "createdAt": "2026-11-04T10:22:54.560Z",
+  "id": "OesF7kvn21RQSR8O",
+  "name": "My workflow 2",
+  "description": "Soru AI production workflowu: hakem doğrulaması, güçlü modelle yeniden çözüm, güvenli kart ve JSON üretimi. Docker API: soru-ai:3001.",
+  "active": true,
+  "isArchived": false,
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0dc6a29d-335f-4a95-9a08-6cca2bea672b",
+              "name": "imageUrl",
+              "value": "={{ $json.fotoLink }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        4528,
+        0
+      ],
+      "id": "d7efdfae-f0fe-489b-b673-690896ff8bf5",
+      "name": "Görsel URL'sini Hazırla"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        3440,
+        32
+      ],
+      "id": "c125837b-bdcf-4a25-a0c3-a585c090c008",
+      "name": "Manuel Test Tetikleyicisi"
+    },
+    {
+      "parameters": {
+        "url": "https://firestore.googleapis.com/v1/projects/project-21-3e377/databases/(default)/documents/sorular",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        3648,
+        32
+      ],
+      "id": "1421f0ee-2e59-45f8-a21d-53d2b4bad9b0",
+      "name": "Firestore Sorularını Getir"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst docs = $json.documents || [];\n\nconst normalizeStudentSelection = (value) => {\n  const normalized = String(value ?? '').trim().toLocaleUpperCase('tr-TR');\n  return /^[A-E]$/.test(normalized) ? normalized : 'Bilinmiyor';\n};\n\nreturn docs.map(doc => ({\n  json: {\n    docName: doc.name,\n    docId: doc.name.split('/').pop(),\n    fotoLink: doc.fields?.fotoLink?.stringValue || null,\n    durum: doc.fields?.durum?.stringValue || null,\n    kullaniciEposta: doc.fields?.kullaniciEposta?.stringValue || null,\n    tarih: doc.fields?.tarih?.stringValue || null,\n    ogrenciSecimi: normalizeStudentSelection(doc.fields?.ogrenciSecimi?.stringValue)\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3840,
+        32
+      ],
+      "id": "d1553abf-d44d-495a-9010-a468f86e4e36",
+      "name": "Soru Kayıtlarını Dönüştür"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "de6af238-3fdc-4f96-9cfc-4efe57fc7711",
+              "leftValue": "={{ $('Firestore Sorularını Getir').item.json.documents[0].fields.durum.stringValue }}",
+              "rightValue": "Bekliyor",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4272,
+        16
+      ],
+      "id": "0f2aa189-62cc-4126-b905-cf5f061191c2",
+      "name": "İlk Soru Bekliyor mu?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "c7333849-4460-43b1-80dd-8e22463b6a6b",
+              "leftValue": "={{ $json.durum }}",
+              "rightValue": "Bekliyor",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            },
+            {
+              "id": "0262d443-214d-4b9e-ac54-7c7913d1d34e",
+              "leftValue": "={{ $json.fotoLink }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4000,
+        32
+      ],
+      "id": "f488e6e2-7553-45d6-b5d5-f379975f7379",
+      "name": "Bekleyen ve Görselli mi?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://soru-ai:3001/image-to-base64",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "originalImageUrl",
+              "value": "={{$json.fotoLink}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        672,
+        1888
+      ],
+      "id": "ea5e3c5e-43c5-4244-a2b8-9f210144249f",
+      "name": "Görseli Base64'e Çevir",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "HtnWqQzu67whQqEA",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\":\"gpt-6.1-terra\",\"reasoning_effort\":\"none\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Görseldeki soruyu dikkatle oku ve çöz. Grafiklerde önce eksenleri ve birimleri, sonra her doğru için en az iki (x,y) noktasını steps içinde açıkça yaz. Eğimleri bu noktalardan hesapla. Eşitlik karşılaştırması yalnızca aynı x koordinatında, yani aynı mutlak zamanda yapılabilir; farklı zamanlarda görülen aynı y değerlerini eşitlenme anı sayma. Sonradan başlayan nesnenin başlangıcından geçen süre ile ortak mutlak zamanı ayrı değişkenlerle göster. Çizginin görselde bitmesi sabit kalma anlamına gelmez; doğrusal model devam eder. Denklemleri aynı mutlak zamanda eşitle, sonucu her iki denklemde geri yerine koy ve seçeneklerle karşılaştır. İşlemi ikinci yöntemle kontrol et. Okunamayan kritik değer varsa confidence 0.91 veya altı olsun. Yalnızca şemaya uygun JSON döndür. Bir grafikte bir noktanın x değerini belirlerken o noktadan x eksenine inen kendi dikey kesikli kılavuzunu takip et; aynı y seviyesindeki yatay kesikli çizgiyi başka bir doğrunun x etiketine kadar takip edip yanlış x değeri atama. Birden fazla ayrı doğru parçası varsa her parçanın uç noktalarını yalnız kendi dikey izdüşümleriyle eşleştir. Örnek kontrol: P doğrusu (0,100) noktasından başlayıp kendi dikey kılavuzu x=5 olan (5,150) noktasında gösteriliyor; Q doğrusu ise x=12 ve x=15 arasında çiziliyorsa, P’nin ikinci noktası kesinlikle (12,150) veya (15,150) değildir, (5,150)’dir. Yatay kesikli çizgi yalnız y seviyesini taşır, x bilgisini taşımaz. Çözümden önce her nokta için “bu x etiketiyle doğrudan bağlı dikey kılavuz var mı?” sorusunu cevapla.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:{{$json.mimeType}};base64,{{$json.base64}}\",\"detail\":\"high\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"primary_solution\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"answer\":{\"type\":\"string\"},\"topic\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1}},\"required\":[\"question\",\"steps\",\"answer\",\"topic\",\"confidence\"],\"additionalProperties\":false}}}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1136,
+        1728
+      ],
+      "id": "6e7508f9-b478-4ecc-b175-85e7fb871518",
+      "name": "OpenAI ile Soruyu Çöz",
+      "credentials": {
+        "openAiApi": {
+          "id": "C8WF2628HRb8HytZ",
+          "name": "OpenAI account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.choices?.[0]?.message?.content ?? '';\nconst fence = String.fromCharCode(96).repeat(3);\nconst cleaned = String(raw).replaceAll(fence + 'json', '').replaceAll(fence, '').trim();\nconst start = cleaned.indexOf('{');\nconst end = cleaned.lastIndexOf('}');\nif (start < 0 || end <= start) throw new Error('Birinci çözüm JSON döndürmedi');\nconst parsed = JSON.parse(cleaned.slice(start, end + 1));\nif (!parsed.question || !Array.isArray(parsed.steps) || !parsed.answer || !parsed.topic) throw new Error('Birinci çözüm eksik alan içeriyor');\nconst confidence = Number(parsed.confidence);\nconst image = $(\"Görseli Base64'e Çevir\").first().json;\nreturn [{ json: { question: String(parsed.question), steps: parsed.steps.map(String), answer: String(parsed.answer), topic: String(parsed.topic), confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0, mimeType: image.mimeType, base64: image.base64, rawOpenAi: raw } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        2016
+      ],
+      "id": "6e8f3b7f-92c9-4ed8-8b38-6ff6ffcf2c92",
+      "name": "AI Yanıtını Ayrıştır",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const escapeHtml = (value) => String(value ?? '')\n  .replace(/&/g, '&amp;')\n  .replace(/</g, '&lt;')\n  .replace(/>/g, '&gt;')\n  .replace(/\"/g, '&quot;')\n  .replace(/'/g, '&#39;');\n\nconst rawQuestion = $json.question || '';\nconst rawSteps = Array.isArray($json.steps) ? $json.steps : [];\nconst rawAnswer = $json.answer || '';\nconst rawTopic = $json.topic || '';\nconst verification = $json.verification || {};\n\nconst question = escapeHtml(rawQuestion);\nconst steps = rawSteps.map(escapeHtml);\nconst answer = escapeHtml(rawAnswer);\nconst topic = escapeHtml(rawTopic);\nconst stepsHtml = steps.map((step, index) => '<li><strong>Adım ' + (index + 1) + ':</strong> ' + step + '</li>').join('');\n\nconst html = '<!DOCTYPE html><html lang=\"tr\"><head><meta charset=\"UTF-8\"><style>' +\n  'body{margin:0;padding:32px;background:#f3f4f6;font-family:Arial,sans-serif}' +\n  '.card{width:900px;background:#fff;border-radius:24px;padding:36px;box-shadow:0 12px 40px rgba(0,0,0,.12);color:#111827}' +\n  '.title{font-size:32px;font-weight:800;margin-bottom:16px}.topic{font-size:18px;color:#2563eb;margin-bottom:24px;font-weight:700}' +\n  '.question{font-size:22px;line-height:1.5;margin-bottom:28px}ol{padding-left:24px;font-size:19px;line-height:1.6}li{margin-bottom:12px}' +\n  '.verified{margin:0 0 20px;color:#166534;font-size:15px;font-weight:700}.answer{margin-top:32px;padding:20px;border-radius:16px;background:#dcfce7;font-size:26px;font-weight:800;color:#166534}' +\n  '</style></head><body><div class=\"card\"><div class=\"title\">Soru Çözümü</div><div class=\"topic\">' + topic +\n  '</div><div class=\"verified\">✓ Bağımsız AI doğrulamasından geçti</div><div class=\"question\">' + question + '</div><ol>' + stepsHtml + '</ol><div class=\"answer\">Cevap: ' + answer +\n  '</div></div></body></html>';\n\nreturn [{ json: { question: rawQuestion, steps: rawSteps, answer: rawAnswer, topic: rawTopic, lesson: String($json.lesson || \"Diğer\"), similarQuestions: Array.isArray($json.similarQuestions) ? $json.similarQuestions : [], verification, html } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -7488,
+        576
+      ],
+      "id": "150fad9c-be5e-4907-ac0c-509dca4de41d",
+      "name": "Kart HTML'ini Oluştur",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://soru-ai:3001/save-solution-json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "userId",
+              "value": "={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.userId}}"
+            },
+            {
+              "name": "question",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.question}}"
+            },
+            {
+              "name": "steps",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.steps}}"
+            },
+            {
+              "name": "answer",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.answer}}"
+            },
+            {
+              "name": "topic",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.topic}}"
+            },
+            {
+              "name": "cardImageUrl",
+              "value": "={{$json.cardImageUrl}}"
+            },
+            {
+              "name": "firebasePath",
+              "value": "={{$json.firebasePath}}"
+            },
+            {
+              "name": "questionFileId",
+              "value": "={{$('Kartı Oluştur ve Yükle').item.json.questionFileId}}"
+            },
+            {
+              "name": "verification",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.verification}}"
+            },
+            {
+              "name": "lesson",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.lesson}}"
+            },
+            {
+              "name": "similarQuestions",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.similarQuestions}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -7072,
+        576
+      ],
+      "id": "c267769a-15e7-4498-98d5-ed12855af038",
+      "name": "Çözüm JSON'unu Kaydet",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "HtnWqQzu67whQqEA",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://soru-ai:3001/render",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "html",
+              "value": "={{ $json.html }}"
+            },
+            {
+              "name": "userId",
+              "value": "={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.userId}}"
+            },
+            {
+              "name": "questionFileId",
+              "value": "={{ $node[\"Görseli Base64'e Çevir\"].json.questionFileId }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -7280,
+        576
+      ],
+      "id": "61b48cf4-e50c-4681-b42e-f361fadcd769",
+      "name": "Kartı Oluştur ve Yükle",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "HtnWqQzu67whQqEA",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        16,
+        1888
+      ],
+      "id": "56216c01-fdfb-4447-8e4c-390c1ff3734f",
+      "name": "Zamanlanmış Tetikleyici"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://soru-ai:3001/update-question-status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "docName",
+              "value": "={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.docName}}"
+            },
+            {
+              "name": "cardImageUrl",
+              "value": "={{$('Kartı Oluştur ve Yükle').item.json.cardImageUrl}}"
+            },
+            {
+              "name": "firebasePath",
+              "value": "={{$('Kartı Oluştur ve Yükle').item.json.firebasePath}}"
+            },
+            {
+              "name": "jsonUrl",
+              "value": "={{$json.jsonUrl}}"
+            },
+            {
+              "name": "jsonPath",
+              "value": "={{$json.jsonPath}}"
+            },
+            {
+              "name": "processingLockId",
+              "value": "={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.processingLockId}}"
+            },
+            {
+              "name": "verification",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.verification}}"
+            },
+            {
+              "name": "answer",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.answer}}"
+            },
+            {
+              "name": "topic",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.topic}}"
+            },
+            {
+              "name": "lesson",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.lesson}}"
+            },
+            {
+              "name": "similarQuestions",
+              "value": "={{$('Benzer Soruları Ayrıştır').item.json.similarQuestions}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -6864,
+        576
+      ],
+      "id": "f0417058-46c0-4203-8faa-849686896a0a",
+      "name": "Soruyu Çözüldü Olarak İşaretle",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "HtnWqQzu67whQqEA",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "http://soru-ai:3001/get-pending-question",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        224,
+        1888
+      ],
+      "id": "91fa25f9-eb06-4ce2-8da1-733629da27fa",
+      "name": "Bekleyen Soruyu Kilitle ve Getir",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "HtnWqQzu67whQqEA",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1378cfb2-2ec1-4336-b126-70171db02659",
+              "leftValue": "={{$json.hasQuestion}}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        432,
+        1888
+      ],
+      "id": "5300fa01-387b-45ab-a78b-57beb4c2ce89",
+      "name": "Bekleyen Soru Var mı?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "41fc8076-727f-43f6-846c-7680aa5d15c6",
+              "leftValue": "={{$json.success}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        880,
+        1888
+      ],
+      "id": "2ad795c2-bf6c-4811-a379-0e4c01d3d6e8",
+      "name": "Görsel Hazır mı?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://soru-ai:3001/cancel-question",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "docName",
+              "value": "={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.docName}}"
+            },
+            {
+              "name": "reason",
+              "value": "Görsel silinmiş veya erişilemiyor"
+            },
+            {
+              "name": "processingLockId",
+              "value": "={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.processingLockId}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1088,
+        2000
+      ],
+      "id": "b7f7414b-27f7-426e-bd40-f12aa1a1fe57",
+      "name": "Soruyu İptal Et",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "HtnWqQzu67whQqEA",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\":\"gpt-4.1\",\"temperature\":0,\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Bu soruyu başka bir çözümden tamamen bağımsız çöz. Grafiklerde önce eksenleri ve birimleri, sonra her doğru için en az iki (x,y) noktasını steps içinde açıkça yaz. Eğimleri bu noktalardan hesapla. Eşitlik karşılaştırması yalnızca aynı x koordinatında, yani aynı mutlak zamanda yapılabilir; farklı zamanlarda görülen aynı y değerlerini eşitlenme anı sayma. Sonradan başlayan bir nesnenin başlangıcından geçen süre ile ortak mutlak zamanı ayrı değişkenlerle göster. Çizginin görselde bitmesi sabit kalma anlamına gelmez; doğrusal model devam eder. Denklemleri aynı mutlak zamanda eşitle, sonucu her iki denklemde geri yerine koy ve seçeneklerle karşılaştır. Okunamayan kritik değer varsa confidence 0.91 veya altı olsun. Yalnızca şemaya uygun JSON döndür. Bir grafikte bir noktanın x değerini belirlerken o noktadan x eksenine inen kendi dikey kesikli kılavuzunu takip et; aynı y seviyesindeki yatay kesikli çizgiyi başka bir doğrunun x etiketine kadar takip edip yanlış x değeri atama. Birden fazla ayrı doğru parçası varsa her parçanın uç noktalarını yalnız kendi dikey izdüşümleriyle eşleştir. Örnek kontrol: P doğrusu (0,100) noktasından başlayıp kendi dikey kılavuzu x=5 olan (5,150) noktasında gösteriliyor; Q doğrusu ise x=12 ve x=15 arasında çiziliyorsa, P’nin ikinci noktası kesinlikle (12,150) veya (15,150) değildir, (5,150)’dir. Yatay kesikli çizgi yalnız y seviyesini taşır, x bilgisini taşımaz. Çözümden önce her nokta için “bu x etiketiyle doğrudan bağlı dikey kılavuz var mı?” sorusunu cevapla.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:{{$json.mimeType}};base64,{{$json.base64}}\",\"detail\":\"high\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"independent_solution\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"answer\":{\"type\":\"string\"},\"topic\":{\"type\":\"string\"},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1}},\"required\":[\"question\",\"steps\",\"answer\",\"topic\",\"confidence\"],\"additionalProperties\":false}}}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        0,
+        2288
+      ],
+      "id": "aeb7383b-c9ec-472a-9d38-9297f44c0edb",
+      "name": "Bağımsız İkinci Çözüm",
+      "credentials": {
+        "openAiApi": {
+          "id": "C8WF2628HRb8HytZ",
+          "name": "OpenAI account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst raw = $json.choices?.[0]?.message?.content ?? '';\nconst fence = String.fromCharCode(96).repeat(3);\nconst cleaned = String(raw).replaceAll(fence + 'json', '').replaceAll(fence, '').trim();\nconst start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}');\nif (start < 0 || end <= start) throw new Error('İkinci çözüm JSON döndürmedi');\nconst parsed = JSON.parse(cleaned.slice(start, end + 1));\nif (!parsed.question || !Array.isArray(parsed.steps) || !parsed.answer || !parsed.topic) throw new Error('İkinci çözüm eksik alan içeriyor');\n\nconst normalizeStudentSelection = (value) => {\n  const normalized = String(value ?? '').trim().toLocaleUpperCase('tr-TR');\n  return /^[A-E]$/.test(normalized) ? normalized : 'Bilinmiyor';\n};\nlet pending = {};\nlet manual = {};\ntry { pending = $('Bekleyen Soruyu Kilitle ve Getir').first().json || {}; } catch (_) {}\ntry { manual = $('Soru Kayıtlarını Dönüştür').first().json || {}; } catch (_) {}\nconst studentSelection = normalizeStudentSelection(pending.ogrenciSecimi ?? manual.ogrenciSecimi);\n\nconst confidence = Number(parsed.confidence);\nconst primary = $('AI Yanıtını Ayrıştır').first().json;\nconst image = $(\"Görseli Base64'e Çevir\").first().json;\nconst independent = { question: String(parsed.question), steps: parsed.steps.map(String), answer: String(parsed.answer), topic: String(parsed.topic), confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0 };\nconst primarySummary = { question: primary.question, steps: primary.steps, answer: primary.answer, topic: primary.topic, confidence: primary.confidence };\nconst judgePrompt = [\n  'Görseldeki soruyu kendin yeniden çöz ve aşağıdaki iki kör aday çözümü kanıtlarıyla karşılaştır. Çoğunluğa körü körüne uyma.',\n  'İlk iki çözücü öğrenci seçimini GÖRMEDEN çalıştı. Öğrenci seçimi yalnızca sonradan kullanılacak, güvenilmez bir karşılaştırma sinyalidir; doğru cevap kabul edilmemelidir.',\n  'Öğrenci seçimi: ' + studentSelection,\n  'Öğrenci seçimi A-E ise kendi doğruladığın final cevabın şık harfiyle karşılaştır. Uyuşmazlık öğrencinin yanlış seçmiş olabileceği anlamına gelir; yalnız bu seçime dayanarak cevabını değiştirme.',\n  'Grafiklerde önce her doğrunun en az iki (x,y) noktasını ve eğimini çıkar. Bir noktanın x değerini yalnız o noktadan x eksenine inen kendi dikey kesikli kılavuzundan oku; yatay kılavuz x bilgisi taşımaz.',\n  'Eşitliği yalnız aynı x koordinatında, yani aynı mutlak zamanda denetle. Sonradan başlayan nesnenin başlangıcından geçen süreyi ortak zamandan ayır ve sonucu denklemlere geri koy.',\n  'Görsel net değilse, adaylar uyuşmuyorsa veya sonucu matematiksel/mantıksal olarak doğrulayamıyorsan approved=false ve needsManualReview=true yap. Güven 0.92 altında ise onaylama.',\n  'lesson yalnızca şu 12 değerden biri olmalı ve yazımı birebir aynı olmalı: Matematik, Fizik, Kimya, Biyoloji, Türkçe, Edebiyat, Tarih, Coğrafya, Felsefe, Din Kültürü, İngilizce, Diğer.',\n  'Ders eşleştirme: Geometri → Matematik; Türk Dili ve Edebiyatı → Edebiyat; Mantık, Psikoloji ve Sosyoloji → Felsefe; Din Kültürü ve Ahlak Bilgisi → Din Kültürü; yabancı dil ve YDT İngilizce → İngilizce.',\n  'Paragraf, dil bilgisi, sözcükte ve cümlede anlam soruları Türkçe; edebiyat tarihi, edebi akımlar, nazım/şiir bilgisi ve yazar-eser soruları Edebiyat olarak işaretlenmeli.',\n  'Diğer YALNIZCA bu derslerin hiçbirine uymayan sorularda kullanılmalı.',\n  'Birinci kör çözüm: ' + JSON.stringify(primarySummary),\n  'İkinci kör çözüm: ' + JSON.stringify(independent)\n].join('\\n');\nreturn [{ json: { ...independent, independent, primary: primarySummary, studentSelection, judgePrompt, judgePromptJsonEscaped: JSON.stringify(judgePrompt).slice(1, -1), mimeType: image.mimeType, base64: image.base64, rawIndependent: raw } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        2288
+      ],
+      "id": "8f07fc32-89ad-40c8-916d-deaba865ddfe",
+      "name": "İkinci Çözümü Ayrıştır",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\":\"gpt-6-luna\",\"reasoning_effort\":\"none\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"{{$json.judgePromptJsonEscaped}}\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:{{$json.mimeType}};base64,{{$json.base64}}\",\"detail\":\"low\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"verified_solution_compact\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"answer\":{\"type\":\"string\"},\"topic\":{\"type\":\"string\"},\"lesson\":{\"type\":\"string\",\"enum\":[\"Matematik\",\"Fizik\",\"Kimya\",\"Biyoloji\",\"Türkçe\",\"Edebiyat\",\"Tarih\",\"Coğrafya\",\"Felsefe\",\"Din Kültürü\",\"İngilizce\",\"Diğer\"]},\"approved\":{\"type\":\"boolean\"},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"primaryAnswer\":{\"type\":\"string\"},\"independentAnswer\":{\"type\":\"string\"},\"rationale\":{\"type\":\"string\"},\"needsManualReview\":{\"type\":\"boolean\"}},\"required\":[\"question\",\"steps\",\"answer\",\"topic\",\"lesson\",\"approved\",\"confidence\",\"primaryAnswer\",\"independentAnswer\",\"rationale\",\"needsManualReview\"],\"additionalProperties\":false}}}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        416,
+        2288
+      ],
+      "id": "7c0e51bf-6c93-4a57-a127-bd02ed06dde8",
+      "name": "Hakem GPT ile Karar Ver",
+      "credentials": {
+        "openAiApi": {
+          "id": "C8WF2628HRb8HytZ",
+          "name": "OpenAI account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst raw = $json.choices?.[0]?.message?.content ?? '';\nconst fence = String.fromCharCode(96).repeat(3);\nconst cleaned = String(raw).replaceAll(fence + 'json', '').replaceAll(fence, '').trim();\nconst start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}');\nif (start < 0 || end <= start) throw new Error('Hakem geçerli JSON döndürmedi');\nconst parsed = JSON.parse(cleaned.slice(start, end + 1));\nif (!parsed.question || !Array.isArray(parsed.steps) || !parsed.steps.length || !parsed.answer || !parsed.topic || !parsed.lesson) throw new Error('Hakem sonucu eksik');\n\nconst optionLetter = (value) => {\n  const text = String(value ?? '').trim().toLocaleUpperCase('tr-TR');\n  const match = text.match(/^(?:CEVAP\\s*[:=-]?\\s*)?([A-E])(?:[).:\\s-]|$)/);\n  return match ? match[1] : null;\n};\nconst judgeInput = $('İkinci Çözümü Ayrıştır').first().json;\nconst studentSelection = /^[A-E]$/.test(String(judgeInput.studentSelection || '')) ? String(judgeInput.studentSelection) : 'Bilinmiyor';\nconst finalAnswerLetter = optionLetter(parsed.answer);\nconst selectionKnown = studentSelection !== 'Bilinmiyor';\nconst studentSelectionMatchesFinal = selectionKnown && finalAnswerLetter !== null ? studentSelection === finalAnswerLetter : null;\nconst requiresBlindRetry = selectionKnown && studentSelectionMatchesFinal !== true;\nconst confidence = Number(parsed.confidence);\nconst safeConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0;\nconst judgeApproved = parsed.approved === true && parsed.needsManualReview !== true && safeConfidence >= 0.92;\nconst approved = judgeApproved && !requiresBlindRetry;\nconst verification = {\n  approved, judgeApproved, confidence: safeConfidence,\n  primaryAnswer: String(parsed.primaryAnswer ?? ''),\n  independentAnswer: String(parsed.independentAnswer ?? ''),\n  finalAnswer: String(parsed.answer), finalAnswerLetter,\n  studentSelection, studentSelectionMatchesFinal, requiresBlindRetry,\n  rationale: String(parsed.rationale ?? '')\n};\nreturn [{ json: { question: String(parsed.question), steps: parsed.steps.map(String), answer: String(parsed.answer), topic: String(parsed.topic), lesson: String(parsed.lesson), verificationApproved: approved, verification } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        2288
+      ],
+      "id": "3d2062fd-f1a4-4a5f-aecc-59fb14ed6d14",
+      "name": "Hakem Sonucunu Ayrıştır",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "285ac4af-02ce-4ae0-bc34-8d9df9836319",
+              "leftValue": "={{$json.verificationApproved}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        832,
+        2288
+      ],
+      "id": "b9e5cc47-44ae-4773-aa7e-f2d7d87dfe7f",
+      "name": "Doğrulama Yeterli mi?"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://soru-ai:3001/mark-question-review",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "docName",
+              "value": "={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.docName}}"
+            },
+            {
+              "name": "processingLockId",
+              "value": "={{$('Bekleyen Soruyu Kilitle ve Getir').item.json.processingLockId}}"
+            },
+            {
+              "name": "verification",
+              "value": "={{$json.verification}}"
+            },
+            {
+              "name": "reason",
+              "value": "={{$json.verification.rationale || 'Bağımsız doğrulama yetersiz'}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        2768
+      ],
+      "id": "02176744-bd83-45a3-ad45-53dc06b6870f",
+      "name": "İnceleme Gerekiyor",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "HtnWqQzu67whQqEA",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst rejected = $json;\nconst image = $(\"Görseli Base64'e Çevir\").first().json;\nconst verification = rejected.verification || {};\nconst prompt = [\n  'Sen son çare uzman çözücüsün. Soruyu görselden sıfırdan, bağımsız ve adım adım çöz.',\n  'Öğrenci seçimi sana verilmemiştir ve hiçbir şekilde tahmin edilmeye çalışılmamalıdır.',\n  'Önceki doğrulama ek bir kör çözüm gerektirdi. Önceki cevapları çoğunluk oyu gibi kullanma; tüm hesabı kendin kur.',\n  'Grafik varsa eksenleri, birimleri ve her doğru için en az iki (x,y) noktasını açıkça çıkar; x değerini yalnız ilgili dikey izdüşümden oku.',\n  'Aynı mutlak zamanda denklemleri eşitle, sonucu iki denklemde geri yerine koy ve seçeneklerle kontrol et.',\n  'Sonucu ikinci, bağımsız bir yöntemle doğrula. Kritik değer okunamıyorsa approved=false ve needsManualReview=true yap.',\n  'confidence 0.94 altında ise approved=false yap.',\n  'lesson yalnızca şu 12 değerden biri olmalı ve yazımı birebir aynı olmalı: Matematik, Fizik, Kimya, Biyoloji, Türkçe, Edebiyat, Tarih, Coğrafya, Felsefe, Din Kültürü, İngilizce, Diğer.',\n  'Ders eşleştirme: Geometri → Matematik; Türk Dili ve Edebiyatı → Edebiyat; Mantık, Psikoloji ve Sosyoloji → Felsefe; Din Kültürü ve Ahlak Bilgisi → Din Kültürü; yabancı dil ve YDT İngilizce → İngilizce.',\n  'Paragraf, dil bilgisi, sözcükte ve cümlede anlam soruları Türkçe; edebiyat tarihi, edebi akımlar, nazım/şiir bilgisi ve yazar-eser soruları Edebiyat olarak işaretlenmeli.',\n  'Diğer YALNIZCA bu derslerin hiçbirine uymayan sorularda kullanılmalı.',\n  'Birinci kör çözümün cevabı: ' + String(verification.primaryAnswer || ''),\n  'İkinci kör çözümün cevabı: ' + String(verification.independentAnswer || ''),\n  'Hakemin görselden doğruladığı cevap: ' + String(rejected.answer || ''),\n  'Yalnızca istenen JSON şemasına uygun sonuç döndür.'\n].join('\\n');\nreturn [{ json: { prompt, promptJsonEscaped: JSON.stringify(prompt).slice(1, -1), mimeType: image.mimeType, base64: image.base64, previousVerification: verification } }];"
+      },
+      "id": "d4f934db-eb86-4b44-9809-b975d851802a",
+      "name": "Güçlü Yeniden Çözüm İstemini Hazırla",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        2608
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\":\"gpt-5.2\",\"reasoning_effort\":\"high\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"{{$json.promptJsonEscaped}}\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:{{$json.mimeType}};base64,{{$json.base64}}\",\"detail\":\"high\"}}]}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"strong_retry_solution_compact\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"answer\":{\"type\":\"string\"},\"topic\":{\"type\":\"string\"},\"lesson\":{\"type\":\"string\",\"enum\":[\"Matematik\",\"Fizik\",\"Kimya\",\"Biyoloji\",\"Türkçe\",\"Edebiyat\",\"Tarih\",\"Coğrafya\",\"Felsefe\",\"Din Kültürü\",\"İngilizce\",\"Diğer\"]},\"approved\":{\"type\":\"boolean\"},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"rationale\":{\"type\":\"string\"},\"needsManualReview\":{\"type\":\"boolean\"}},\"required\":[\"question\",\"steps\",\"answer\",\"topic\",\"lesson\",\"approved\",\"confidence\",\"rationale\",\"needsManualReview\"],\"additionalProperties\":false}}}}",
+        "options": {}
+      },
+      "id": "45025d41-8cd2-4bb8-92e0-04dcafa1472d",
+      "name": "Güçlü Model ile Yeniden Çöz",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1248,
+        2608
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "openAiApi": {
+          "id": "C8WF2628HRb8HytZ",
+          "name": "OpenAI account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst raw = $json.choices?.[0]?.message?.content ?? '';\nconst fence = String.fromCharCode(96).repeat(3);\nconst cleaned = String(raw).replaceAll(fence + 'json', '').replaceAll(fence, '').trim();\nconst start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}');\nif (start < 0 || end <= start) throw new Error('Güçlü model geçerli JSON döndürmedi');\nconst parsed = JSON.parse(cleaned.slice(start, end + 1));\nif (!parsed.question || !Array.isArray(parsed.steps) || !parsed.steps.length || !parsed.answer || !parsed.topic || !parsed.lesson) throw new Error('Güçlü çözüm eksik');\nconst optionLetter = (value) => {\n  const text = String(value ?? '').trim().toLocaleUpperCase('tr-TR');\n  const match = text.match(/^(?:CEVAP\\s*[:=-]?\\s*)?([A-E])(?:[).:\\s-]|$)/);\n  return match ? match[1] : null;\n};\nconst confidence = Number(parsed.confidence);\nconst safeConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0;\nconst approved = parsed.approved === true && parsed.needsManualReview !== true && safeConfidence >= 0.94;\nconst previous = $('Güçlü Yeniden Çözüm İstemini Hazırla').first().json.previousVerification || {};\nconst finalAnswerLetter = optionLetter(parsed.answer);\nconst studentSelection = /^[A-E]$/.test(String(previous.studentSelection || '')) ? String(previous.studentSelection) : 'Bilinmiyor';\nconst studentSelectionMatchesFinal = studentSelection !== 'Bilinmiyor' && finalAnswerLetter !== null ? studentSelection === finalAnswerLetter : null;\nconst verification = {\n  approved, confidence: safeConfidence,\n  finalAnswer: String(parsed.answer), finalAnswerLetter,\n  studentSelection, studentSelectionMatchesFinal,\n  rationale: String(parsed.rationale || ''),\n  escalatedToStrongModel: true,\n  strongModelWasBlindToStudentSelection: true,\n  previousJudge: previous\n};\nreturn [{ json: { question: String(parsed.question), steps: parsed.steps.map(String), answer: String(parsed.answer), topic: String(parsed.topic), lesson: String(parsed.lesson), verificationApproved: approved, verification } }];"
+      },
+      "id": "649f9a0c-b208-4234-b800-54a6fc9fab78",
+      "name": "Güçlü Çözümü Ayrıştır",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        2608
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "641713f1-c465-4d0c-8869-fef48d5f1f01",
+              "leftValue": "={{$json.verificationApproved}}",
+              "rightValue": "true",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d08726fe-9ac1-424d-89f6-b728748808b8",
+      "name": "Güçlü Çözüm Yeterli mi?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1664,
+        2608
+      ]
+    },
+    {
+      "id": "359a9af8-f95f-4f72-9761-a2cf43af7c1e",
+      "name": "Benzer Soru İstemini Hazırla",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -8112,
+        576
+      ],
+      "parameters": {
+        "jsCode": "\nconst solution = $json;\nconst source = {\n  question: String(solution.question || ''),\n  steps: Array.isArray(solution.steps) ? solution.steps.map(String) : [],\n  answer: String(solution.answer || ''),\n  topic: String(solution.topic || ''),\n  lesson: String(solution.lesson || 'Diğer')\n};\nconst prompt = [\n  'Aşağıdaki doğrulanmış soru ve çözümle aynı konu ve kazanımı ölçen üç özgün çoktan seçmeli soru üret.',\n  'Sıra ve seviye tam olarak kolay, orta, zor olsun.',\n  'Her soruda tam 5 seçenek bulunmalı ve A), B), C), D), E) ön ekleriyle sıralanmalıdır.',\n  'correct_option, options dizisindeki doğru seçeneğin tamamıyla birebir aynı olmalıdır.',\n  'Çözüm adımları kısa, doğru ve kontrol edilmiş olsun. Kaynak soruyu kopyalama.',\n  'Doğrulanmış kaynak: ' + JSON.stringify(source)\n].join('\\n');\nreturn [{ json: { ...solution, similarPrompt: prompt, similarPromptJsonEscaped: JSON.stringify(prompt).slice(1, -1) } }];"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "c52839f0-63fd-4b17-a5e3-452e4823f97a",
+      "name": "Ekonomik Modelle Benzer Sorular",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -7904,
+        576
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "C8WF2628HRb8HytZ",
+          "name": "OpenAI account"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"model\":\"gpt-6-luna\",\"reasoning_effort\":\"none\",\"messages\":[{\"role\":\"user\",\"content\":\"{{$json.similarPromptJsonEscaped}}\"}],\"response_format\":{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"similar_questions_only\",\"strict\":true,\"schema\":{\"type\":\"object\",\"properties\":{\"similarQuestions\":{\"type\":\"array\",\"minItems\":3,\"maxItems\":3,\"items\":{\"type\":\"object\",\"properties\":{\"level\":{\"type\":\"string\",\"enum\":[\"kolay\",\"orta\",\"zor\"]},\"question\":{\"type\":\"string\"},\"steps\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"answer\":{\"type\":\"string\"},\"options\":{\"type\":\"array\",\"minItems\":5,\"maxItems\":5,\"items\":{\"type\":\"string\"}},\"correct_option\":{\"type\":\"string\"}},\"required\":[\"level\",\"question\",\"steps\",\"answer\",\"options\",\"correct_option\"],\"additionalProperties\":false}}},\"required\":[\"similarQuestions\"],\"additionalProperties\":false}}}}",
+        "options": {}
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "cb908ac5-6501-4f19-bd71-d2a766ef91f1",
+      "name": "Benzer Soruları Ayrıştır",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -7696,
+        576
+      ],
+      "parameters": {
+        "jsCode": "\nconst raw = $json.choices?.[0]?.message?.content ?? '';\nconst fence = String.fromCharCode(96).repeat(3);\nconst cleaned = String(raw).replaceAll(fence + 'json', '').replaceAll(fence, '').trim();\nconst start = cleaned.indexOf('{'); const end = cleaned.lastIndexOf('}');\nif (start < 0 || end <= start) throw new Error('Benzer soru modeli geçerli JSON döndürmedi');\nconst parsed = JSON.parse(cleaned.slice(start, end + 1));\nconst expectedLevels = ['kolay', 'orta', 'zor'];\nif (!Array.isArray(parsed.similarQuestions) || parsed.similarQuestions.length !== 3) throw new Error('Üç benzer soru üretilmedi');\nconst similarQuestions = parsed.similarQuestions.map((item, index) => {\n  const level = String(item?.level ?? '').toLocaleLowerCase('tr-TR');\n  const options = Array.isArray(item?.options) ? item.options.map(String).map(value => value.trim()).filter(Boolean) : [];\n  const correctOption = String(item?.correct_option ?? '').trim();\n  const labels = ['A', 'B', 'C', 'D', 'E'];\n  if (level !== expectedLevels[index] || !item?.question || !Array.isArray(item?.steps) || !item.steps.length || !item?.answer) throw new Error(expectedLevels[index] + ' benzer soru geçersiz');\n  if (options.length !== 5) throw new Error(level + ' sorusunda 5 şık bulunmuyor');\n  if (!options.every((option, i) => new RegExp('^' + labels[i] + '[).:-]\\\\s*', 'i').test(option))) throw new Error(level + ' sorusunun şıkları A-E biçiminde değil');\n  const answerText = String(item?.answer ?? '').trim();\n  const correctLabel = (correctOption.match(/^([A-E])(?:[).:\\-]|\\s|$)/i)?.[1]\n    || answerText.match(/^([A-E])(?:[).:\\-]|\\s|$)/i)?.[1])?.toUpperCase();\n  const stripLabel = value => String(value || '').replace(/^[A-E][).:-]\\s*/i, '').trim().toLocaleLowerCase('tr-TR');\n  const correctText = stripLabel(correctOption);\n  const normalizedCorrectOption = options.includes(correctOption)\n    ? correctOption\n    : options.find(option => correctLabel && new RegExp('^' + correctLabel + '[).:-]\\\\s*', 'i').test(option))\n      || options.find(option => correctText && stripLabel(option) === correctText)\n      || correctOption;\n  if (!normalizedCorrectOption) throw new Error(level + ' sorusunda doğru şık boş');\n  return { level, question: String(item.question), steps: item.steps.map(String), answer: String(item.answer), options, correct_option: normalizedCorrectOption };\n});\nconst solution = $('Benzer Soru İstemini Hazırla').first().json;\nreturn [{ json: { question: solution.question, steps: solution.steps, answer: solution.answer, topic: solution.topic, lesson: solution.lesson, verificationApproved: solution.verificationApproved, verification: solution.verification, similarQuestions } }];"
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "id": "5f493a64-bd5b-45a3-a3c3-92e6d38fd7de",
+      "name": "Teknik Hatayı İncelemeye Gönder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1872,
+        3188
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "HtnWqQzu67whQqEA",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "Herhangi bir adımda teknik hata olursa soru 'İnceleme Gerekli' yapılır (hak otomatik iade edilir). Bu çağrı da başarısız olursa sunucudaki kilit süresi dolunca tekrar denenir; 3. seferde yine İnceleme Gerekli olur.",
+      "parameters": {
+        "method": "POST",
+        "url": "http://soru-ai:3001/mark-question-review",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": []
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "docName",
+              "value": "={{ $('Bekleyen Soruyu Kilitle ve Getir').first().json.docName }}"
+            },
+            {
+              "name": "processingLockId",
+              "value": "={{ $('Bekleyen Soruyu Kilitle ve Getir').first().json.processingLockId }}"
+            },
+            {
+              "name": "reason",
+              "value": "={{ ('Teknik hata (' + $prevNode.name + '): ' + String(($json.error && ($json.error.message || $json.error.description)) || $json.error || $json.message || 'bilinmeyen hata')).slice(0, 900) }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Manuel Test Tetikleyicisi": {
+      "main": [
+        [
+          {
+            "node": "Firestore Sorularını Getir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firestore Sorularını Getir": {
+      "main": [
+        [
+          {
+            "node": "Soru Kayıtlarını Dönüştür",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Soru Kayıtlarını Dönüştür": {
+      "main": [
+        [
+          {
+            "node": "Bekleyen ve Görselli mi?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "İlk Soru Bekliyor mu?": {
+      "main": [
+        [
+          {
+            "node": "Görsel URL'sini Hazırla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bekleyen ve Görselli mi?": {
+      "main": [
+        [
+          {
+            "node": "İlk Soru Bekliyor mu?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Görseli Base64'e Çevir": {
+      "main": [
+        [
+          {
+            "node": "Görsel Hazır mı?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI ile Soruyu Çöz": {
+      "main": [
+        [
+          {
+            "node": "AI Yanıtını Ayrıştır",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Yanıtını Ayrıştır": {
+      "main": [
+        [
+          {
+            "node": "Bağımsız İkinci Çözüm",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kart HTML'ini Oluştur": {
+      "main": [
+        [
+          {
+            "node": "Kartı Oluştur ve Yükle",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Çözüm JSON'unu Kaydet": {
+      "main": [
+        [
+          {
+            "node": "Soruyu Çözüldü Olarak İşaretle",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kartı Oluştur ve Yükle": {
+      "main": [
+        [
+          {
+            "node": "Çözüm JSON'unu Kaydet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zamanlanmış Tetikleyici": {
+      "main": [
+        [
+          {
+            "node": "Bekleyen Soruyu Kilitle ve Getir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bekleyen Soruyu Kilitle ve Getir": {
+      "main": [
+        [
+          {
+            "node": "Bekleyen Soru Var mı?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bekleyen Soru Var mı?": {
+      "main": [
+        [
+          {
+            "node": "Görseli Base64'e Çevir",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Görsel Hazır mı?": {
+      "main": [
+        [
+          {
+            "node": "OpenAI ile Soruyu Çöz",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Soruyu İptal Et",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bağımsız İkinci Çözüm": {
+      "main": [
+        [
+          {
+            "node": "İkinci Çözümü Ayrıştır",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "İkinci Çözümü Ayrıştır": {
+      "main": [
+        [
+          {
+            "node": "Hakem GPT ile Karar Ver",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hakem GPT ile Karar Ver": {
+      "main": [
+        [
+          {
+            "node": "Hakem Sonucunu Ayrıştır",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hakem Sonucunu Ayrıştır": {
+      "main": [
+        [
+          {
+            "node": "Doğrulama Yeterli mi?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Doğrulama Yeterli mi?": {
+      "main": [
+        [
+          {
+            "node": "Benzer Soru İstemini Hazırla",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Güçlü Yeniden Çözüm İstemini Hazırla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Güçlü Yeniden Çözüm İstemini Hazırla": {
+      "main": [
+        [
+          {
+            "node": "Güçlü Model ile Yeniden Çöz",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Güçlü Model ile Yeniden Çöz": {
+      "main": [
+        [
+          {
+            "node": "Güçlü Çözümü Ayrıştır",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Güçlü Çözümü Ayrıştır": {
+      "main": [
+        [
+          {
+            "node": "Güçlü Çözüm Yeterli mi?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Güçlü Çözüm Yeterli mi?": {
+      "main": [
+        [
+          {
+            "node": "Benzer Soru İstemini Hazırla",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "İnceleme Gerekiyor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Benzer Soru İstemini Hazırla": {
+      "main": [
+        [
+          {
+            "node": "Ekonomik Modelle Benzer Sorular",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ekonomik Modelle Benzer Sorular": {
+      "main": [
+        [
+          {
+            "node": "Benzer Soruları Ayrıştır",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Benzer Soruları Ayrıştır": {
+      "main": [
+        [
+          {
+            "node": "Kart HTML'ini Oluştur",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Soruyu Çözüldü Olarak İşaretle": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Soruyu İptal Et": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "İnceleme Gerekiyor": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": {
+    "node:Zamanlanmış Tetikleyici": {
+      "recurrenceRules": [
+        null
+      ],
+      "recurrenceRuleSignatures": [
+        null
+      ]
+    }
+  },
+  "meta": {
+    "costTargetTry": "0.50 TRY",
+    "costOptimizationVersion": 2
+  },
+  "nodeGroups": [],
+  "pinData": {},
+  "versionId": "9b7b4853-4d97-4929-a230-b89661df23fc",
+  "activeVersionId": "9b7b4853-4d97-4929-a230-b89661df23fc",
+  "triggerCount": 1,
+  "sourceWorkflowId": null,
+  "tags": [],
+  "versionMetadata": {
+    "name": "Production credential bağlantıları",
+    "description": "Yedi Soru AI API node’u Header Auth account, dört OpenAI node’u OpenAI account credential’ına bağlandı."
+  }
+}

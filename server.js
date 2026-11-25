@@ -4,6 +4,7 @@ const admin = require("firebase-admin");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
 const puppeteer = require("puppeteer");
+const { latexToDisplayText, sanitizeDisplayValue } = require("./display-text");
 
 const app = express();
 app.disable("x-powered-by");
@@ -47,6 +48,26 @@ const RATE_LIMIT_MAX = Math.min(Math.max(Number(process.env.RATE_LIMIT_MAX) || 1
 const rateLimitBuckets = new Map();
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const EXPOSE_ERROR_DETAILS = process.env.EXPOSE_ERROR_DETAILS === "true";
+const REVIEW_STATUS = "İnceleme Gerekli";
+const UID_PATTERN = /^[A-Za-z0-9]{1,128}$/;
+const QUESTION_TIME_PATTERN = /^\d{13}$/;
+const MAX_LEASE_EXPIRIES = 3;
+const LESSONS = ["Matematik", "Fizik", "Kimya", "Biyoloji", "Türkçe", "Edebiyat", "Tarih", "Coğrafya", "Felsefe", "Din Kültürü", "İngilizce", "Diğer"];
+const LESSON_ALIASES = new Map([
+  ["geometri", "Matematik"],
+  ["türk dili ve edebiyatı", "Edebiyat"],
+  ["türk edebiyatı", "Edebiyat"],
+  ["mantık", "Felsefe"],
+  ["psikoloji", "Felsefe"],
+  ["sosyoloji", "Felsefe"],
+  ["din kültürü ve ahlak bilgisi", "Din Kültürü"],
+  ["din kültürü ve ahlâk bilgisi", "Din Kültürü"],
+  ["din", "Din Kültürü"],
+  ["yabancı dil", "İngilizce"],
+  ["ydt", "İngilizce"],
+  ["ydt ingilizce", "İngilizce"],
+  ["english", "İngilizce"]
+]);
 
 if (!API_TOKEN || API_TOKEN.length < 32) {
   throw new Error("SORU_AI_API_TOKEN en az 32 karakter olmalıdır");
@@ -140,13 +161,45 @@ function normalizeVerification(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const confidence = Number(value.confidence);
   const approved = value.approved === true;
-  const primaryAnswer = String(value.primaryAnswer || "").trim().slice(0, 500);
-  const independentAnswer = String(value.independentAnswer || "").trim().slice(0, 500);
+  const primaryAnswer = String(value.primaryAnswer || value.previousJudge?.primaryAnswer || "").trim().slice(0, 500);
+  const independentAnswer = String(value.independentAnswer || value.previousJudge?.independentAnswer || "").trim().slice(0, 500);
   const finalAnswer = String(value.finalAnswer || "").trim().slice(0, 500);
   const rationale = String(value.rationale || "").trim().slice(0, 4000);
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) return null;
   if (!primaryAnswer || !independentAnswer || !finalAnswer) return null;
   return { approved, confidence, primaryAnswer, independentAnswer, finalAnswer, rationale };
+}
+
+// Uygulamanın beklediği 12 dersten birini döndürür; eşleşmezse "Diğer".
+function normalizeLesson(value) {
+  const text = latexToDisplayText(String(value || "")).normalize("NFC").trim().replace(/\s+/g, " ");
+  if (LESSONS.includes(text)) return text;
+  const lower = text.toLocaleLowerCase("tr-TR");
+  const exact = LESSONS.find((lesson) => lesson.toLocaleLowerCase("tr-TR") === lower);
+  if (exact) return exact;
+  return LESSON_ALIASES.get(lower) || "Diğer";
+}
+
+// Storage klasör adı: yalnızca harf ve rakamdan oluşan kullaniciUid (e-posta asla kullanılmaz).
+function validUid(value) {
+  const uid = String(value || "").trim();
+  return UID_PATTERN.test(uid) ? uid : null;
+}
+
+// {zaman}: kullanicilar/{uid}/sorular/{zaman}.jpg içindeki 13 haneli sayı
+function validQuestionTime(value) {
+  const time = String(value || "").trim();
+  return QUESTION_TIME_PATTERN.test(time) ? time : null;
+}
+
+function reviewUpdate(reason) {
+  return {
+    durum: REVIEW_STATUS,
+    reviewReason: String(reason || "Teknik hata").slice(0, 1000),
+    reviewRequestedAt: new Date(),
+    processingLockId: FieldValue.delete(),
+    processingLeaseExpiresAt: FieldValue.delete()
+  };
 }
 
 function safePathSegment(value, fallback) {
@@ -209,6 +262,56 @@ app.get("/get-pending-question", async (req, res) => {
       return sendError(res, 400, "Geçersiz docId");
     }
 
+    const reviewSnapshot = await db.collection("sorular")
+      .where("durum", "==", "İnceleme Gerekli")
+      .limit(20)
+      .get();
+    for (const reviewDoc of reviewSnapshot.docs) {
+      await db.runTransaction(async (transaction) => {
+        const fresh = await transaction.get(reviewDoc.ref);
+        if (!fresh.exists || fresh.data()?.durum !== "İnceleme Gerekli") return;
+        const retryCount = Math.max(0, Number(fresh.data()?.reviewRetryCount) || 0);
+        if (retryCount >= 3) return;
+        transaction.update(reviewDoc.ref, {
+          durum: "Bekliyor",
+          reviewRetryCount: retryCount + 1,
+          lastReviewRetryAt: new Date(),
+          processingLockId: FieldValue.delete(),
+          processingLeaseExpiresAt: FieldValue.delete()
+        });
+      });
+    }
+
+    const processingSnapshot = await db.collection("sorular")
+      .where("durum", "==", "İşleniyor")
+      .limit(50)
+      .get();
+    const now = new Date();
+    for (const processingDoc of processingSnapshot.docs) {
+      const lease = processingDoc.data().processingLeaseExpiresAt?.toDate?.();
+      if (!lease || lease > now) continue;
+      await db.runTransaction(async (transaction) => {
+        const fresh = await transaction.get(processingDoc.ref);
+        const freshLease = fresh.data()?.processingLeaseExpiresAt?.toDate?.();
+        if (fresh.exists && fresh.data()?.durum === "İşleniyor" && freshLease && freshLease <= new Date()) {
+          const expiries = Math.max(0, Number(fresh.data()?.leaseExpiryCount) || 0) + 1;
+          if (expiries >= MAX_LEASE_EXPIRIES) {
+            transaction.update(processingDoc.ref, {
+              ...reviewUpdate(`Teknik hata: işlem ${expiries} kez zaman aşımına uğradı`),
+              leaseExpiryCount: expiries
+            });
+          } else {
+            transaction.update(processingDoc.ref, {
+              durum: "Bekliyor",
+              leaseExpiryCount: expiries,
+              processingLockId: FieldValue.delete(),
+              processingLeaseExpiresAt: FieldValue.delete()
+            });
+          }
+        }
+      });
+    }
+
     const claim = await db.runTransaction(async (transaction) => {
       let doc;
       if (requestedDocId) {
@@ -245,33 +348,34 @@ app.get("/get-pending-question", async (req, res) => {
 
     const { doc, data, processingLockId, processingStartedAt, processingLeaseExpiresAt } = claim;
     const fotoLink = data.fotoLink || "";
+    const kullaniciUid = validUid(data.kullaniciUid);
+    if (!kullaniciUid) {
+      await doc.ref.update(reviewUpdate("kullaniciUid eksik veya geçersiz (yalnızca harf ve rakam); dosya yazılmadı"));
+      return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "kullaniciUid geçersiz" });
+    }
     const docName = `projects/project-21-3e377/databases/(default)/documents/sorular/${doc.id}`;
 
     if (!fotoLink) {
-      await doc.ref.update({
-        durum: "Soru İptal Edildi",
-        cancelReason: "fotoLink boş",
-        canceledAt: new Date(),
-        processingLockId: FieldValue.delete(),
-        processingLeaseExpiresAt: FieldValue.delete()
-      });
+      await doc.ref.update(reviewUpdate("Teknik hata: fotoLink boş"));
       return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "fotoLink boş" });
     }
 
     const filePath = getStoragePath(fotoLink);
-    if (!filePath || !isAllowedQuestionImagePath(filePath)) return sendError(res, 400, "Geçersiz fotoLink");
+    if (!filePath || !isAllowedQuestionImagePath(filePath)) {
+      await doc.ref.update(reviewUpdate("Teknik hata: fotoLink geçersiz"));
+      return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "fotoLink geçersiz" });
+    }
+    const pathParts = filePath.split("/");
+    const questionTime = validQuestionTime(pathParts[pathParts.length - 1].replace(/\.[^/.]+$/, ""));
+    if (pathParts[1] !== kullaniciUid || !questionTime) {
+      await doc.ref.update(reviewUpdate("Fotoğraf yolu kullanicilar/{kullaniciUid}/sorular/{13 haneli zaman} biçiminde değil; dosya yazılmadı"));
+      return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "Fotoğraf yolu geçersiz" });
+    }
 
     const file = bucket.file(filePath);
     const [exists] = await file.exists();
     if (!exists) {
-      await doc.ref.update({
-        durum: "Soru İptal Edildi",
-        cancelReason: "Storage görseli bulunamadı",
-        errorFilePath: filePath,
-        canceledAt: new Date(),
-        processingLockId: FieldValue.delete(),
-        processingLeaseExpiresAt: FieldValue.delete()
-      });
+      await doc.ref.update({ ...reviewUpdate("Teknik hata: Storage görseli bulunamadı"), errorFilePath: filePath });
       return res.json({
         success: true,
         hasQuestion: false,
@@ -284,13 +388,7 @@ app.get("/get-pending-question", async (req, res) => {
     const contentType = metadata.contentType || contentTypeFromName(filePath);
     const size = Number(metadata.size || 0);
     if (!ALLOWED_IMAGE_TYPES.has(contentType) || !Number.isFinite(size) || size <= 0 || size > MAX_IMAGE_BYTES) {
-      await doc.ref.update({
-        durum: "İnceleme Gerekli",
-        reviewReason: "Görsel türü veya boyutu güvenlik sınırlarını aşmaktadır",
-        reviewRequestedAt: new Date(),
-        processingLockId: FieldValue.delete(),
-        processingLeaseExpiresAt: FieldValue.delete()
-      });
+      await doc.ref.update(reviewUpdate("Görsel türü veya boyutu güvenlik sınırlarını aşmaktadır"));
       return res.json({ success: true, hasQuestion: false, skipped: true, skipReason: "Görsel güvenlik kontrolü başarısız" });
     }
 
@@ -302,13 +400,17 @@ app.get("/get-pending-question", async (req, res) => {
       processingLockId,
       processingStartedAt: processingStartedAt.toISOString(),
       processingLeaseExpiresAt: processingLeaseExpiresAt.toISOString(),
-      userId: getUserIdFromFotoLink(fotoLink, data.kullaniciEposta || doc.id),
-      questionFileId: getQuestionFileId(filePath),
+      userId: kullaniciUid,
+      kullaniciUid,
+      questionFileId: questionTime,
       fotoLink,
       filePath,
       durum: "İşleniyor",
       kullaniciEposta: data.kullaniciEposta || "",
-      tarih: data.tarih || ""
+      tarih: data.tarih || "",
+      ogrenciSecimi: /^[A-E]$/.test(String(data.ogrenciSecimi || "").trim().toUpperCase())
+        ? String(data.ogrenciSecimi).trim().toUpperCase()
+        : "Bilinmiyor"
     });
   } catch (error) {
     return sendError(res, 500, "Bekleyen soru alınamadı", error.message);
@@ -353,20 +455,19 @@ app.post("/render", async (req, res) => {
     if (typeof html !== "string" || !html.trim()) return sendError(res, 400, "html gerekli");
     if (Buffer.byteLength(html, "utf8") > 1024 * 1024) return sendError(res, 413, "HTML çok büyük");
 
-    const finalUserId = safePathSegment(userId, "unknown");
-    const finalFileId = safePathSegment(questionFileId, crypto.randomUUID());
-    browser = await puppeteer.launch({ headless: "new" });
-    const page = await browser.newPage();
-    await page.setJavaScriptEnabled(false);
-    await page.setRequestInterception(true);
-    page.on("request", (request) => {
-      const url = request.url();
-      if (url.startsWith("data:") || url.startsWith("about:")) request.continue();
-      else request.abort();
+    const finalUserId = validUid(userId);
+    const finalFileId = validQuestionTime(questionFileId);
+    if (!finalUserId || !finalFileId) return sendError(res, 422, "Geçersiz kullaniciUid veya zaman; dosya yazılmadı");
+    const renderResponse = await fetch("http://renderer:3002/render", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ html }),
+      signal: AbortSignal.timeout(30000)
     });
-    await page.setViewport({ width: 1000, height: 1200, deviceScaleFactor: 2 });
-    await page.setContent(html, { waitUntil: "domcontentloaded", timeout: 15000 });
-    const buffer = await page.screenshot({ type: "png", fullPage: true });
+    if (!renderResponse.ok) throw new Error(`Renderer HTTP ${renderResponse.status}`);
+    const renderResult = await renderResponse.json();
+    if (!renderResult.pngBase64) throw new Error("Renderer geçersiz yanıt döndürdü");
+    const buffer = Buffer.from(renderResult.pngBase64, "base64");
 
     const fileName = `solution-cards/${finalUserId}/${finalFileId}.png`;
     const file = bucket.file(fileName);
@@ -404,13 +505,17 @@ app.post("/save-solution-json", async (req, res) => {
       return sendError(res, 422, "Doğrulanan cevap ile kaydedilen cevap uyuşmuyor");
     }
 
-    const finalUserId = safePathSegment(userId, "unknown");
-    const finalFileId = safePathSegment(questionFileId, crypto.randomUUID());
+    const finalUserId = validUid(userId);
+    const finalFileId = validQuestionTime(questionFileId);
+    if (!finalUserId || !finalFileId) return sendError(res, 422, "Geçersiz kullaniciUid veya zaman; dosya yazılmadı");
+    if (firebasePath !== `solution-cards/${finalUserId}/${finalFileId}.png`) return sendError(res, 422, "Kart yolu kullanıcı/zaman ile uyuşmuyor");
     const solutionData = {
-      question,
-      steps: Array.isArray(steps) ? steps : [],
-      answer,
-      topic: topic || "",
+      question: latexToDisplayText(question),
+      steps: Array.isArray(steps) ? steps.map(latexToDisplayText) : [],
+      answer: latexToDisplayText(answer),
+      topic: latexToDisplayText(topic || ""),
+      lesson: normalizeLesson(req.body.lesson),
+      similarQuestions: sanitizeDisplayValue(req.body.similarQuestions || []),
       cardImageUrl,
       firebasePath,
       verification,
@@ -441,13 +546,19 @@ app.post("/save-solution-json", async (req, res) => {
 app.post("/update-question-status", async (req, res) => {
   try {
     const { docName, processingLockId, cardImageUrl, firebasePath, jsonUrl, jsonPath } = req.body;
+    const displayAnswer = latexToDisplayText(req.body.answer || "");
+    const displayTopic = latexToDisplayText(req.body.topic || "");
+    const displayLesson = normalizeLesson(req.body.lesson);
+    const displaySimilarQuestions = sanitizeDisplayValue(req.body.similarQuestions || []);
     const verification = normalizeVerification(req.body.verification);
     const docRef = getFirestoreDocRef(docName);
     if (!docRef || !processingLockId) return sendError(res, 400, "docName ve processingLockId gerekli");
     if (![cardImageUrl, firebasePath, jsonUrl, jsonPath].every((value) => typeof value === "string" && value.trim())) {
       return sendError(res, 422, "Kart ve JSON çıktıları tamamlanmadan soru çözüldü yapılamaz");
     }
-    if (!firebasePath.startsWith("solution-cards/") || !jsonPath.startsWith("cozumDetayi/")) {
+    const cardMatch = /^solution-cards\/([A-Za-z0-9]{1,128})\/(\d{13})\.png$/.exec(firebasePath);
+    const jsonMatch = /^cozumDetayi\/([A-Za-z0-9]{1,128})\/(\d{13})\.json$/.exec(jsonPath);
+    if (!cardMatch || !jsonMatch || cardMatch[1] !== jsonMatch[1] || cardMatch[2] !== jsonMatch[2]) {
       return sendError(res, 422, "Çıktı yolları geçersiz");
     }
     if (!verification || !verification.approved || verification.confidence < MIN_VERIFICATION_CONFIDENCE) {
@@ -475,6 +586,11 @@ app.post("/update-question-status", async (req, res) => {
         error.status = 409;
         throw error;
       }
+      if (validUid(data.kullaniciUid) !== cardMatch[1]) {
+        const error = new Error("Çıktı klasörü sorunun kullaniciUid alanıyla uyuşmuyor");
+        error.status = 422;
+        throw error;
+      }
 
       transaction.update(docRef, {
         durum: "Çözüldü",
@@ -483,6 +599,12 @@ app.post("/update-question-status", async (req, res) => {
         jsonUrl,
         jsonPath,
         verification,
+        correct_answer: displayAnswer,
+        topic: displayTopic,
+        lesson: displayLesson,
+        ders: displayLesson,
+        similarQuestions: displaySimilarQuestions,
+        benzerSorular: displaySimilarQuestions,
         solvedAt: new Date(),
         processingLockId: FieldValue.delete(),
         processingLeaseExpiresAt: FieldValue.delete()
@@ -517,7 +639,7 @@ app.post("/mark-question-review", async (req, res) => {
         throw error;
       }
       transaction.update(docRef, {
-        durum: "İnceleme Gerekli",
+        durum: REVIEW_STATUS,
         reviewReason: reason,
         verification: verification || null,
         reviewRequestedAt: new Date(),
@@ -551,16 +673,10 @@ app.post("/cancel-question", async (req, res) => {
         error.status = 409;
         throw error;
       }
-      transaction.update(docRef, {
-        durum: "Soru İptal Edildi",
-        cancelReason: reason || "İşlem başarısız",
-        canceledAt: new Date(),
-        processingLockId: FieldValue.delete(),
-        processingLeaseExpiresAt: FieldValue.delete()
-      });
+      transaction.update(docRef, reviewUpdate(`Teknik hata: ${reason || "İşlem başarısız"}`));
     });
 
-    return res.json({ success: true, message: "Soru iptal edildi" });
+    return res.json({ success: true, durum: REVIEW_STATUS, message: "Soru incelemeye alındı" });
   } catch (error) {
     return sendError(res, error.status || 500, "Soru iptal edilemedi", error.message);
   }
