@@ -238,7 +238,14 @@ function failedAttemptUpdate(data, reason, { permanent = false } = {}) {
   const attempts = Math.max(0, Number(data.failedAttemptCount) || 0) + 1;
   const text = String(reason || "Teknik hata").slice(0, 1000);
   if (permanent || attempts >= MAX_SOLVE_ATTEMPTS) {
-    return { ...reviewUpdate(text), failedAttemptCount: attempts };
+    // Döngü bitti: sayaç sıfırlanır. Soru sonradan (ör. uygulamanın kararıyla) yeniden
+    // "Bekliyor" yapılırsa n8n onu otomatik alır ve yine 3 tam deneme hakkı olur.
+    return {
+      ...reviewUpdate(text),
+      failedAttemptCount: 0,
+      lastCycleFailedAttempts: attempts,
+      reviewCycleCount: FieldValue.increment(1)
+    };
   }
   return {
     durum: WAITING_STATUS,

@@ -92,3 +92,12 @@ test("İptal Edildi is terminal and status changes are preconditioned", () => {
     assert.ok(sent.includes("docName") && sent.includes("processingLockId"), `${name} must send docName + processingLockId`);
   }
 });
+
+test("a question re-queued to Bekliyor (e.g. after İptal Edildi) gets 3 fresh attempts", () => {
+  const start = server.indexOf("function failedAttemptUpdate");
+  const body = server.slice(start, server.indexOf("\n}\n", start));
+  assert.match(body, /\.\.\.reviewUpdate\(text\),\s*failedAttemptCount: 0,/);
+  // talep: get-pending "Bekliyor" olan her soruyu alır; önceki iptal/inceleme geçmişi engel değildir
+  assert.match(server, /where\("durum", "==", "Bekliyor"\)/);
+  assert.doesNotMatch(server, /where\("durum", "==", "Bekliyor"\)[^;]*kullaniciKarari/);
+});
