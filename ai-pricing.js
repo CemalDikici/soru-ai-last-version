@@ -69,4 +69,21 @@ function priceCalls(rawCalls) {
   };
 }
 
-module.exports = { PRICING_VERSION, MODEL_PRICES, baseModel, priceCall, priceCalls };
+// Günlük özet için model bazında toplar (aynı model bir denemede birden çok kez kullanılabilir:
+// ör. hakem + benzer sorular ikisi de gpt-6-luna). Firestore alan adında nokta olmaması için anahtar temizlenir.
+function modelTotals(calls) {
+  const totals = {};
+  for (const call of calls) {
+    const key = (call.fiyatModeli || "bilinmeyen").replace(/[^A-Za-z0-9-]/g, "_");
+    const total = totals[key] || { cagriSayisi: 0, girdiToken: 0, onbellekToken: 0, ciktiToken: 0, maliyetUsd: 0 };
+    total.cagriSayisi += 1;
+    total.girdiToken += call.girdiToken;
+    total.onbellekToken += call.onbellekToken;
+    total.ciktiToken += call.ciktiToken;
+    total.maliyetUsd += call.maliyetUsd || 0;
+    totals[key] = total;
+  }
+  return totals;
+}
+
+module.exports = { PRICING_VERSION, MODEL_PRICES, baseModel, priceCall, priceCalls, modelTotals };

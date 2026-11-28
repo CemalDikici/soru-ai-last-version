@@ -5,7 +5,7 @@ const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
 const puppeteer = require("puppeteer");
 const { latexToDisplayText, sanitizeDisplayValue } = require("./display-text");
-const { PRICING_VERSION, priceCalls } = require("./ai-pricing");
+const { PRICING_VERSION, priceCalls, modelTotals } = require("./ai-pricing");
 
 const app = express();
 app.disable("x-powered-by");
@@ -746,17 +746,10 @@ app.post("/record-ai-cost", async (req, res) => {
     const recordRef = db.collection("aiMaliyetKayitlari").doc(`n8n-${executionId}`);
     const dayRef = db.collection("aiMaliyetGunluk").doc(day);
 
-    const modelTotals = {};
-    for (const call of calls) {
-      const key = (call.fiyatModeli || "bilinmeyen").replace(/[^A-Za-z0-9-]/g, "_");
-      modelTotals[key] = {
-        cagriSayisi: FieldValue.increment(1),
-        girdiToken: FieldValue.increment(call.girdiToken),
-        onbellekToken: FieldValue.increment(call.onbellekToken),
-        ciktiToken: FieldValue.increment(call.ciktiToken),
-        maliyetUsd: FieldValue.increment(call.maliyetUsd || 0)
-      };
-    }
+    const modelIncrements = Object.fromEntries(Object.entries(modelTotals(calls)).map(([model, total]) => [
+      model,
+      Object.fromEntries(Object.entries(total).map(([field, value]) => [field, FieldValue.increment(value)]))
+    ]));
 
     const duplicate = await db.runTransaction(async (transaction) => {
       const existing = await transaction.get(recordRef);
@@ -786,7 +779,8 @@ app.post("/record-ai-cost", async (req, res) => {
         sonuclar: { [outcome]: FieldValue.increment(1) },
         gucluCozumSayisi: FieldValue.increment(calls.some((call) => call.adim === "gucluCozum") ? 1 : 0),
         toplamMaliyetUsd: FieldValue.increment(totalUsd),
-        modeller: modelTotals,
+        // Boş harita merge'de mevcut "modeller" alanını silerdi; çağrı yoksa alan hiç yazılmaz.
+        ...(Object.keys(modelIncrements).length ? { modeller: modelIncrements } : {}),
         fiyatTablosuSurumu: PRICING_VERSION,
         guncellemeTarihi: now
       }, { merge: true });

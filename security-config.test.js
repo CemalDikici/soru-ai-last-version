@@ -132,3 +132,7 @@ test("AI cost is recorded at every AI terminal without touching the question flo
     assert.ok(calc.parameters.jsCode.includes(`successOutput(() => $('${aiNode}'))`), aiNode);
   }
 });
+
+test("daily cost summary never overwrites model totals with an empty map", () => {
+  assert.match(server, /Object\.keys\(modelIncrements\)\.length \? \{ modeller: modelIncrements \} : \{\}/);
+});

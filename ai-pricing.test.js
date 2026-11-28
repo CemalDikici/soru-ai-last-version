@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { priceCall, priceCalls, baseModel } = require("./ai-pricing");
+const { priceCall, priceCalls, baseModel, modelTotals } = require("./ai-pricing");
 
 test("dated snapshot names map to the base model", () => {
   assert.equal(baseModel("gpt-4.1-2025-04-14"), "gpt-4.1");
@@ -32,4 +32,17 @@ test("bad input never throws and unknown models are flagged", () => {
   assert.equal(calls[0].girdiToken, 0);
   assert.equal(unknownPrice, true);
   assert.deepEqual(priceCalls("bozuk").calls, []);
+});
+
+test("model totals add up repeated models within one attempt", () => {
+  const { calls } = priceCalls([
+    { step: "hakem", model: "gpt-6-luna", promptTokens: 1500, completionTokens: 250 },
+    { step: "benzerSorular", model: "gpt-6-luna", promptTokens: 400, completionTokens: 500 },
+    { step: "ikinciCozum", model: "gpt-4.1-2025-04-14", promptTokens: 1265, completionTokens: 279 }
+  ]);
+  const totals = modelTotals(calls);
+  assert.deepEqual(Object.keys(totals).sort(), ["gpt-4_1", "gpt-6-luna"]);
+  assert.equal(totals["gpt-6-luna"].cagriSayisi, 2);
+  assert.equal(totals["gpt-6-luna"].girdiToken, 1900);
+  assert.deepEqual(modelTotals([]), {});
 });
