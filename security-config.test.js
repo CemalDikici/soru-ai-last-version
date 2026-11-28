@@ -136,3 +136,17 @@ test("AI cost is recorded at every AI terminal without touching the question flo
 test("daily cost summary never overwrites model totals with an empty map", () => {
   assert.match(server, /Object\.keys\(modelIncrements\)\.length \? \{ modeller: modelIncrements \} : \{\}/);
 });
+
+test("only one question is solved when the photo shows several", () => {
+  const primary = node("OpenAI ile Soruyu Çöz").parameters.jsonBody;
+  assert.match(primary, /Yalnızca TEK bir soruyu çöz/);
+  assert.match(primary, /"required":\["questionCount","selectedQuestionHint",/);
+  assert.match(primary, /kenardan kesilmiş veya yalnızca başlığı görünen soruları sayma/);
+  // Seçimi yalnız ilk çözücü yapar; diğer modeller aynı hedef soruyu çözer.
+  assert.match(node("AI Yanıtını Ayrıştır").parameters.jsCode, /targetInstructionJsonEscaped/);
+  assert.match(node("Bağımsız İkinci Çözüm").parameters.jsonBody, /"text":"\{\{\$json\.targetInstructionJsonEscaped\}\} /);
+  const judge = node("İkinci Çözümü Ayrıştır").parameters.jsCode;
+  assert.match(judge, /Adaylar farklı soruları çözdüyse/);
+  assert.match(judge, /multipleQuestions \? 'Bilinmiyor'/);
+  assert.match(node("Güçlü Yeniden Çözüm İstemini Hazırla").parameters.jsCode, /targetInstruction,\n/);
+});
