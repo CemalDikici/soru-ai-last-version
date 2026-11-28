@@ -5,6 +5,7 @@ const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const { getStorage } = require("firebase-admin/storage");
 const puppeteer = require("puppeteer");
 const { latexToDisplayText, sanitizeDisplayValue } = require("./display-text");
+const { PRICING_VERSION, priceCalls } = require("./ai-pricing");
 
 const app = express();
 app.disable("x-powered-by");
@@ -717,6 +718,84 @@ app.post("/cancel-question", async (req, res) => {
     return res.json({ success: true, durum: update.durum, failedAttemptCount: update.failedAttemptCount });
   } catch (error) {
     return sendError(res, error.status || 500, "Soru güncellenemedi", error.message);
+  }
+});
+
+// Test dönemi maliyet ölçümü: n8n her soru denemesinin sonunda OpenAI token kullanımını gönderir.
+// Soru belgesine dokunulmaz; kayıtlar yalnızca sunucunun yazdığı ayrı koleksiyonlara gider.
+const COST_OUTCOMES = new Set(["cozuldu", "incelemeGerekli", "teknikHata"]);
+const USD_TRY_RATE = Number(process.env.USD_TRY_KURU) > 0 ? Number(process.env.USD_TRY_KURU) : null;
+
+function istanbulDay(date) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Istanbul" }).format(date);
+}
+
+app.post("/record-ai-cost", async (req, res) => {
+  try {
+    const executionId = String(req.body.executionId || "").trim();
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(executionId)) return sendError(res, 400, "Geçerli executionId gerekli");
+    const docRef = getFirestoreDocRef(req.body.docName);
+    if (!docRef) return sendError(res, 400, "Geçerli docName gerekli");
+    const outcome = COST_OUTCOMES.has(req.body.outcome) ? req.body.outcome : "teknikHata";
+    const { calls, totalUsd, unknownPrice } = priceCalls(req.body.calls);
+
+    const question = await docRef.get();
+    const questionData = question.exists ? question.data() : {};
+    const now = new Date();
+    const day = istanbulDay(now);
+    const recordRef = db.collection("aiMaliyetKayitlari").doc(`n8n-${executionId}`);
+    const dayRef = db.collection("aiMaliyetGunluk").doc(day);
+
+    const modelTotals = {};
+    for (const call of calls) {
+      const key = (call.fiyatModeli || "bilinmeyen").replace(/[^A-Za-z0-9-]/g, "_");
+      modelTotals[key] = {
+        cagriSayisi: FieldValue.increment(1),
+        girdiToken: FieldValue.increment(call.girdiToken),
+        onbellekToken: FieldValue.increment(call.onbellekToken),
+        ciktiToken: FieldValue.increment(call.ciktiToken),
+        maliyetUsd: FieldValue.increment(call.maliyetUsd || 0)
+      };
+    }
+
+    const duplicate = await db.runTransaction(async (transaction) => {
+      const existing = await transaction.get(recordRef);
+      if (existing.exists) return true; // aynı çalıştırma iki kez gönderilirse günlük toplam şişmesin
+
+      transaction.set(recordRef, {
+        soruId: docRef.id,
+        kullaniciUid: validUid(questionData.kullaniciUid) || null,
+        ders: (questionData.lesson || questionData.ders || req.body.lesson) ? normalizeLesson(questionData.lesson || questionData.ders || req.body.lesson) : null,
+        ekDenemeli: questionData.ekDenemeKullanildi === true,
+        n8nCalistirmaId: executionId,
+        n8nMod: String(req.body.executionMode || "").slice(0, 20) || null,
+        sonuc: outcome,
+        gucluCozumKullanildi: calls.some((call) => call.adim === "gucluCozum"),
+        cagrilar: calls,
+        cagriSayisi: calls.length,
+        toplamMaliyetUsd: totalUsd,
+        ...(USD_TRY_RATE ? { usdTryKuru: USD_TRY_RATE, toplamMaliyetTry: Number((totalUsd * USD_TRY_RATE).toFixed(6)) } : {}),
+        fiyatBilinmeyenModelVar: unknownPrice,
+        fiyatTablosuSurumu: PRICING_VERSION,
+        gun: day,
+        olusturmaTarihi: now
+      });
+      transaction.set(dayRef, {
+        gun: day,
+        denemeSayisi: FieldValue.increment(1),
+        sonuclar: { [outcome]: FieldValue.increment(1) },
+        gucluCozumSayisi: FieldValue.increment(calls.some((call) => call.adim === "gucluCozum") ? 1 : 0),
+        toplamMaliyetUsd: FieldValue.increment(totalUsd),
+        modeller: modelTotals,
+        fiyatTablosuSurumu: PRICING_VERSION,
+        guncellemeTarihi: now
+      }, { merge: true });
+      return false;
+    });
+
+    return res.json({ success: true, duplicate, totalUsd, calls: calls.length, unknownPrice });
+  } catch (error) {
+    return sendError(res, 500, "AI maliyeti kaydedilemedi", error.message);
   }
 });
 

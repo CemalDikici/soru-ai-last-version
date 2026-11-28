@@ -111,3 +111,21 @@ test("extra attempt (ekDenemeKullanildi): one AI try, then İnceleme Gerekli; ap
   assert.equal(sent("İnceleme Gerekiyor"), "ai");
   assert.equal(sent("Teknik Hatayı İncelemeye Gönder"), "technical");
 });
+
+test("AI cost is recorded at every AI terminal without touching the question flow", () => {
+  assert.match(server, /app\.post\("\/record-ai-cost"/);
+  assert.match(server, /collection\("aiMaliyetKayitlari"\)/);
+  assert.match(server, /collection\("aiMaliyetGunluk"\)/);
+  const calc = node("AI Maliyetini Hesapla");
+  const save = node("AI Maliyetini Kaydet");
+  assert.equal(calc.onError, "continueRegularOutput");
+  assert.equal(save.onError, "continueRegularOutput");
+  assert.equal(save.parameters.url, "http://soru-ai:3001/record-ai-cost");
+  for (const terminal of ["Soruyu Çözüldü Olarak İşaretle", "İnceleme Gerekiyor", "Teknik Hatayı İncelemeye Gönder"]) {
+    const targets = workflow.connections[terminal].main[0].map((c) => c.node);
+    assert.ok(targets.includes("AI Maliyetini Hesapla"), terminal);
+  }
+  for (const aiNode of ["OpenAI ile Soruyu Çöz", "Bağımsız İkinci Çözüm", "Hakem GPT ile Karar Ver", "Güçlü Model ile Yeniden Çöz", "Ekonomik Modelle Benzer Sorular"]) {
+    assert.ok(calc.parameters.jsCode.includes(`$('${aiNode}')`), aiNode); // n8n yalnız açıkça yazılan $('...') adımlarının verisini verir
+  }
+});

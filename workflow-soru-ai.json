@@ -1020,6 +1020,51 @@
         },
         "options": {}
       }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Test dönemi maliyet ölçümü: bu çalıştırmadaki her OpenAI çağrısının token kullanımını toplar.\n// Fiyat hesabı sunucuda (ai-pricing.js) yapılır; burada yalnızca ham token sayıları gönderilir.\n// ÖNEMLİ: n8n kod adımına yalnızca $('Adım Adı') şeklinde açıkça yazılan adımların verisini verir;\n// adım adları değişken/döngüyle verilirse veri gelmez. Bu yüzden her adım ayrı ayrı yazıldı.\n\n// Adım bu çalıştırmada çalıştıysa ilk çıktısını, çalışmadıysa null döndürür.\nconst output = (read) => {\n  try {\n    const node = read();\n    if (node.isExecuted === false) return null;\n    return node.first().json || null;\n  } catch (error) {\n    return null;\n  }\n};\n\nconst SOURCES = [\n  ['ilkCozum', output(() => $('OpenAI ile Soruyu Çöz'))],\n  ['ikinciCozum', output(() => $('Bağımsız İkinci Çözüm'))],\n  ['hakem', output(() => $('Hakem GPT ile Karar Ver'))],\n  ['gucluCozum', output(() => $('Güçlü Model ile Yeniden Çöz'))],\n  ['benzerSorular', output(() => $('Ekonomik Modelle Benzer Sorular'))]\n];\n\nconst calls = [];\nfor (const [step, json] of SOURCES) {\n  const usage = json && json.usage;\n  if (!usage) continue; // çalışmayan ya da hata veren çağrı faturalanmaz\n  calls.push({\n    step,\n    model: String(json.model || ''),\n    promptTokens: Number(usage.prompt_tokens) || 0,\n    cachedTokens: Number(usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens) || 0,\n    completionTokens: Number(usage.completion_tokens) || 0,\n    reasoningTokens: Number(usage.completion_tokens_details && usage.completion_tokens_details.reasoning_tokens) || 0\n  });\n}\n\nlet outcome = 'cozuldu';\nif (output(() => $('Teknik Hatayı İncelemeye Gönder'))) outcome = 'teknikHata';\nelse if (output(() => $('İnceleme Gerekiyor'))) outcome = 'incelemeGerekli';\n\nconst question = $('Bekleyen Soruyu Kilitle ve Getir').first().json;\nreturn [{ json: {\n  executionId: String($execution.id),\n  executionMode: String($execution.mode || ''),\n  docName: question.docName,\n  outcome,\n  calls\n} }];\n"
+      },
+      "id": "eaa060db-b45d-478c-b363-0975b96bb02d",
+      "name": "AI Maliyetini Hesapla",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        2980
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Test dönemi maliyet ölçümü. Soru akışını etkilemez: hata olursa sessizce geçer."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://soru-ai:3001/record-ai-cost",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "ae510b9e-0ed0-4a2b-a312-59b287c7c3aa",
+      "name": "AI Maliyetini Kaydet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2440,
+        2980
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "HtnWqQzu67whQqEA",
+          "name": "Header Auth account"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "notes": "Firestore: aiMaliyetKayitlari (her deneme) + aiMaliyetGunluk (günlük toplam). Başarısız olursa soru etkilenmez."
     }
   ],
   "connections": {
@@ -1455,7 +1500,13 @@
     },
     "Soruyu Çözüldü Olarak İşaretle": {
       "main": [
-        [],
+        [
+          {
+            "node": "AI Maliyetini Hesapla",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Teknik Hatayı İncelemeye Gönder",
@@ -1479,10 +1530,38 @@
     },
     "İnceleme Gerekiyor": {
       "main": [
-        [],
+        [
+          {
+            "node": "AI Maliyetini Hesapla",
+            "type": "main",
+            "index": 0
+          }
+        ],
         [
           {
             "node": "Teknik Hatayı İncelemeye Gönder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teknik Hatayı İncelemeye Gönder": {
+      "main": [
+        [
+          {
+            "node": "AI Maliyetini Hesapla",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Maliyetini Hesapla": {
+      "main": [
+        [
+          {
+            "node": "AI Maliyetini Kaydet",
             "type": "main",
             "index": 0
           }
