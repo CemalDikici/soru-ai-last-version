@@ -125,7 +125,10 @@ test("AI cost is recorded at every AI terminal without touching the question flo
     const targets = workflow.connections[terminal].main[0].map((c) => c.node);
     assert.ok(targets.includes("AI Maliyetini Hesapla"), terminal);
   }
+  assert.match(calc.parameters.jsCode, /node\.first\(0\)/);
+  assert.doesNotMatch(calc.parameters.jsCode, /\.first\(\)/);
   for (const aiNode of ["OpenAI ile Soruyu Çöz", "Bağımsız İkinci Çözüm", "Hakem GPT ile Karar Ver", "Güçlü Model ile Yeniden Çöz", "Ekonomik Modelle Benzer Sorular"]) {
-    assert.ok(calc.parameters.jsCode.includes(`$('${aiNode}')`), aiNode); // n8n yalnız açıkça yazılan $('...') adımlarının verisini verir
+    // first(0): OpenAI adımlarının hata çıkışı da bu adıma bağlı; parametresiz first() boş hata çıkışını seçer
+    assert.ok(calc.parameters.jsCode.includes(`successOutput(() => $('${aiNode}'))`), aiNode);
   }
 });
